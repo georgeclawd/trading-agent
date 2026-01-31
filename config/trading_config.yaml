@@ -43,7 +43,7 @@ markets:
 # Alert Settings
 discord:
   enabled: true
-  # Webhook stored in pass: trading-agent/discord-webhook
+  webhook: "${DISCORD_WEBHOOK}"
   
 # Logging
 log_level: INFO
