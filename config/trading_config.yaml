@@ -1,0 +1,50 @@
+# Trading Agent Configuration
+
+# Initial bankroll in USDC
+initial_bankroll: 100.0
+currency: USDC
+
+# Risk Management
+max_position_size: 0.05      # Max 5% of bankroll per trade
+daily_loss_limit: 0.20       # Stop trading after 20% daily loss
+kelly_fraction: 0.25         # Conservative Kelly criterion
+min_ev_threshold: 0.05       # Minimum 5% expected value
+
+# Scanning
+scan_interval: 300           # 5 minutes between market scans
+
+# Markets to trade
+markets:
+  polymarket:
+    enabled: true
+    api_endpoint: https://api.polymarket.com
+    min_liquidity: 1000      # Minimum $1000 liquidity
+    
+  weather:
+    enabled: true
+    data_source: open-meteo
+    cities:
+      - name: New York
+        lat: 40.7128
+        lon: -74.0060
+      - name: London
+        lat: 51.5074
+        lon: -0.1278
+      - name: Tokyo
+        lat: 35.6762
+        lon: 139.6503
+        
+  sports:
+    enabled: false           # Enable later
+    
+  crypto:
+    enabled: false           # Enable later
+
+# Alert Settings
+discord:
+  enabled: true
+  # Webhook stored in pass: trading-agent/discord-webhook
+  
+# Logging
+log_level: INFO
+save_trades: true
