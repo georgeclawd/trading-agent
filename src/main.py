@@ -15,6 +15,7 @@ from market_scanner import MarketScanner
 from trade_executor import TradeExecutor
 from portfolio_tracker import PortfolioTracker
 from alert_system import AlertSystem
+from whale_watcher import WhaleWatcher
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,6 +38,7 @@ class TradingAgent:
         self.config = self._load_config()
         self.risk_manager = RiskManager(self.config)
         self.market_scanner = MarketScanner(self.config)
+        self.whale_watcher = WhaleWatcher(self.config)
         self.trade_executor = TradeExecutor(self.config)
         self.portfolio = PortfolioTracker(self.config)
         self.alerts = AlertSystem(self.config)
@@ -103,6 +105,12 @@ class TradingAgent:
         
         # 3. Scan for opportunities
         opportunities = await self.market_scanner.find_opportunities()
+        
+        # 3b. Check for whale trades (insider signals)
+        whale_opps = await self.whale_watcher.get_all_opportunities(current_bankroll)
+        if whale_opps:
+            logger.info(f"🐋 Found {len(whale_opps)} whale copy opportunities")
+            opportunities.extend(whale_opps)
         
         if not opportunities:
             logger.info("🔍 No +EV opportunities found")
