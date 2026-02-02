@@ -121,9 +121,29 @@ class PositionMonitor:
                     # Don't close position yet - keep monitoring
                 
                 else:
-                    # Position gone but can't determine status - assume settled at entry
+                    # Position gone but can't determine status - close it locally
+                    # This prevents duplicate trading on the same market
                     logger.warning(f"⚠️ Position disappeared from Kalshi: {ticker} - "
-                                  f"manual review recommended")
+                                  f"closing locally (settlement status unknown)")
+                    
+                    # Close position with unknown settlement (PnL = 0 for now)
+                    # We'll update if settlement data becomes available later
+                    self.position_manager.close_position(
+                        ticker=ticker,
+                        exit_price=local_pos.entry_price,  # Assume break-even
+                        pnl=0.0,  # Unknown until settlement
+                        simulated=False
+                    )
+                    
+                    closed_positions.append({
+                        'ticker': ticker,
+                        'side': local_pos.side,
+                        'contracts': local_pos.contracts,
+                        'entry_price': local_pos.entry_price,
+                        'settlement_price': None,
+                        'pnl': 0.0,
+                        'reason': 'disappeared_from_kalshi'
+                    })
         
         return closed_positions
     
