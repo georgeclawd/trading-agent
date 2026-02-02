@@ -566,6 +566,51 @@ class CryptoMomentumStrategy(BaseStrategy):
         except Exception as e:
             logger.debug(f"CryptoMomentum: Position monitoring error: {e}")
     
+    async def continuous_trade_loop(self):
+        """
+        Continuous trading loop - check for entry/exit every minute
+        Not just at window boundaries - trade anytime edge exists
+        """
+        logger.info("🔄 CryptoMomentum: Starting continuous trade loop (1-min checks)")
+        
+        while True:
+            try:
+                now = datetime.now()
+                minutes_into = now.minute % 15
+                
+                # Log which phase of 15-min window we're in
+                if minutes_into < 5:
+                    phase = "early"
+                elif minutes_into < 10:
+                    phase = "mid"
+                else:
+                    phase = "late"
+                
+                # Only trade if we have enough candles
+                if len(self.candles_1m) >= 30:
+                    # Check for entry opportunities
+                    opportunities = await self.analyze()
+                    
+                    if opportunities:
+                        logger.info(f"🎯 CryptoMomentum: Found {len(opportunities)} opportunities ({phase} phase)")
+                        executed = await self.execute(opportunities)
+                        if executed:
+                            logger.info(f"✅ CryptoMomentum: Executed {executed} trades")
+                    else:
+                        logger.debug(f"📊 CryptoMomentum: No opportunities ({phase} phase, {minutes_into}m into window)")
+                else:
+                    logger.debug(f"📊 CryptoMomentum: Building data ({len(self.candles_1m)}/30 candles)")
+                
+                # Wait 60 seconds before next check
+                await asyncio.sleep(60)
+                
+            except asyncio.CancelledError:
+                logger.info("🛑 CryptoMomentum: Continuous trade loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"❌ CryptoMomentum: Trade loop error: {e}")
+                await asyncio.sleep(60)
+    
     # ==================== STRATEGY INTERFACE ====================
     
     async def analyze(self) -> List[Dict]:

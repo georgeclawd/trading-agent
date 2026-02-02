@@ -303,36 +303,19 @@ class TradingAgent:
         # Convert interval to minutes for display
         interval_min = interval // 60
         
-        # For CryptoMomentum, align to 15-minute market windows
+        # For CryptoMomentum, use continuous trading loop (not discrete cycles)
         if strategy.name == "CryptoMomentum":
-            await self._align_to_market_window(strategy, interval)
+            await self._run_crypto_momentum_loop(strategy)
         else:
             await self._run_strategy_loop(strategy, interval, interval_min)
     
-    async def _align_to_market_window(self, strategy, interval):
-        """Align CryptoMomentum to 15-minute market windows"""
-        now = now_est()
+    async def _run_crypto_momentum_loop(self, strategy):
+        """Run CryptoMomentum in continuous trading mode"""
+        logger.info(f"🚀 Starting CryptoMomentum continuous trading - {format_est()}")
+        logger.info("📈 Trading every minute within 15-min windows (not just at start)")
         
-        # Calculate next 15-minute boundary (:00, :15, :30, :45)
-        minute = now.minute
-        next_boundary_min = ((minute // 15) + 1) * 15
-        
-        if next_boundary_min >= 60:
-            next_boundary = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            next_boundary = now.replace(minute=next_boundary_min, second=0, microsecond=0)
-        
-        wait_seconds = (next_boundary - now).total_seconds()
-        
-        logger.info(f"🔄 CryptoMomentum: Aligning to 15-min market window")
-        logger.info(f"⏰ Current: {now.strftime('%H:%M:%S EST')}")
-        logger.info(f"⏰ Next window: {next_boundary.strftime('%H:%M:%S EST')}")
-        logger.info(f"⏰ Waiting {wait_seconds:.0f} seconds...")
-        
-        await asyncio.sleep(wait_seconds)
-        
-        # Now run the regular loop
-        await self._run_strategy_loop(strategy, interval, 5, aligned=True)
+        # Run the strategy's continuous loop
+        await strategy.continuous_trade_loop()
     
     async def _run_strategy_loop(self, strategy, interval, interval_min, aligned=False):
         """Run strategy in regular loop"""
