@@ -617,6 +617,25 @@ class CryptoMomentumStrategy(BaseStrategy):
         
         return opportunities
     
+    async def scan(self) -> List[Dict]:
+        """Required by BaseStrategy - alias for analyze"""
+        return await self.analyze()
+    
+    def get_performance(self) -> Dict:
+        """Required by BaseStrategy - return performance metrics"""
+        total_trades = len(self.trades)
+        winning_trades = sum(1 for t in self.trades if t.get('pnl', 0) > 0)
+        total_pnl = sum(t.get('pnl', 0) for t in self.trades)
+        
+        return {
+            'name': self.name,
+            'total_trades': total_trades,
+            'winning_trades': winning_trades,
+            'win_rate': winning_trades / total_trades if total_trades > 0 else 0,
+            'total_pnl': total_pnl,
+            'candles_collected': len(self.candles_1m)
+        }
+    
     async def execute(self, opportunities: List[Dict]):
         """
         Execute trades based on opportunities
