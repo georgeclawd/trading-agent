@@ -16,6 +16,11 @@ import os
 
 logger = logging.getLogger('CryptoMomentum')
 
+# Import position monitor
+import sys
+sys.path.insert(0, '/root/clawd/trading-agent/src')
+from position_monitor import PositionMonitor
+
 
 def clamp(value, min_val, max_val):
     """Clamp value between min and max"""
@@ -33,6 +38,12 @@ class CryptoMomentumStrategy(BaseStrategy):
     def __init__(self, config: Dict, client, position_manager=None):
         super().__init__(config, client, position_manager)
         self.name = "CryptoMomentum"
+        
+        # Initialize position monitor for hedge tracking
+        if position_manager:
+            self.position_monitor = PositionMonitor(position_manager)
+        else:
+            self.position_monitor = None
         
         # Market series
         self.series_ticker = "KXBTC15M"
@@ -527,13 +538,46 @@ class CryptoMomentumStrategy(BaseStrategy):
         now = datetime.now()
         return now.minute % 15
     
+    async def _monitor_positions(self):
+        """Monitor existing positions for hedge/exit opportunities"""
+        try:
+            async def get_market_data(ticker):
+                """Fetch current market data for a ticker"""
+                try:
+                    orderbook = self.client.get_orderbook(ticker)
+                    if orderbook and 'orderbook' in orderbook:
+                        yes_bids = orderbook['orderbook'].get('yes', [])
+                        if yes_bids and len(yes_bids) > 0:
+                            # Get best bid price
+                            price = yes_bids[0][0] / 100  # Convert cents to decimal
+                            return {'price': price, 'edge': 0}  # Edge calc would need fair prob
+                except:
+                    pass
+                return None
+            
+            alerts = await self.position_monitor.check_all_positions(self, get_market_data)
+            
+            if alerts:
+                hedges = self.position_monitor.generate_hedge_recommendations(alerts)
+                for hedge in hedges:
+                    logger.warning(f"🔄 HEDGE RECOMMENDED: {hedge['ticker']} - "
+                                   f"Buy {hedge['hedge_side']} x{hedge['hedge_size']} | {hedge['reason']}")
+                    
+        except Exception as e:
+            logger.debug(f"CryptoMomentum: Position monitoring error: {e}")
+    
     # ==================== STRATEGY INTERFACE ====================
     
     async def analyze(self) -> List[Dict]:
         """
         Main analysis - compute indicators and find opportunities
+        Also monitors existing positions for hedge opportunities
         """
         opportunities = []
+        
+        # Monitor existing positions for hedge/exit opportunities
+        if self.position_monitor:
+            await self._monitor_positions()
         
         # Fetch/build candles
         candles = await self.fetch_1m_candles()
