@@ -49,10 +49,13 @@ discord:
 strategies:
   weather_prediction:
     enabled: true
-    allocation: 0.5          # 50% of capital
+    allocation: 0.33         # 33% of capital
   spread_trading:
     enabled: true
-    allocation: 0.5          # 50% of capital
+    allocation: 0.33         # 33% of capital
+  crypto_momentum:
+    enabled: true
+    allocation: 0.34         # 34% of capital
 
 # Logging
 log_level: INFO

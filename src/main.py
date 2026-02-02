@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 
 # Strategy framework
 from strategy_framework import StrategyManager
-from strategies import WeatherPredictionStrategy, SpreadTradingStrategy
+from strategies import WeatherPredictionStrategy, SpreadTradingStrategy, CryptoMomentumStrategy
 
 # Legacy components
 from risk_manager import RiskManager
@@ -125,8 +125,17 @@ class TradingAgent:
                 config=self.config,
                 client=self.kalshi_client
             )
-            allocation = self.config['strategies']['spread_trading'].get('allocation', 0.5)
+            allocation = self.config['strategies']['spread_trading'].get('allocation', 0.33)
             self.strategy_manager.register_strategy(spread_strategy, allocation)
+        
+        # Register Crypto Momentum Strategy
+        if self.config.get('strategies', {}).get('crypto_momentum', {}).get('enabled', True):
+            crypto_strategy = CryptoMomentumStrategy(
+                config=self.config,
+                client=self.kalshi_client
+            )
+            allocation = self.config['strategies']['crypto_momentum'].get('allocation', 0.33)
+            self.strategy_manager.register_strategy(crypto_strategy, allocation)
         
         logger.info(f"✅ Registered {len(self.strategy_manager.strategies)} strategies")
     
