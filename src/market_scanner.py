@@ -84,9 +84,10 @@ class MarketScanner:
         if opportunities:
             logger.info(f"   Best EV: {opportunities[0].get('expected_value', 0):.2%}")
         else:
-            if kalshi_details.get('weather_markets_found', 0) == 0:
-                logger.info(f"   Reason: No weather markets available on Kalshi right now")
-                logger.info(f"   Note: Weather markets are seasonal. Try again during storm/winter season.")
+            if kalshi_details.get('weather_markets_found', 0) == 0 and kalshi_details.get('climate_markets_found', 0) == 0:
+                logger.info(f"   Reason: No weather/climate markets available on Kalshi right now")
+                logger.info(f"   Note: Weather markets are seasonal/event-based and appear during storms/winter.")
+                logger.info(f"   Currently available: Sports ({kalshi_details.get('sports_count', 0)}), Finance ({kalshi_details.get('finance_count', 0)})")
             else:
                 logger.info(f"   Reason: Found markets but none met +EV threshold ({self.config.get('min_ev_threshold', 0.05):.1%})")
         logger.info("="*60)
@@ -105,6 +106,9 @@ class MarketScanner:
         details = {
             'cities_checked': 0,
             'weather_markets_found': 0,
+            'climate_markets_found': 0,
+            'sports_count': 0,
+            'finance_count': 0,
             'markets_with_data': 0,
             'rejected_low_ev': 0,
             'rejected_no_data': 0,
@@ -138,6 +142,18 @@ class MarketScanner:
             
             for market in markets:
                 title = market.get('title', '').lower()
+                
+                # Count by category for reporting
+                if any(k in title for k in ['nba', 'nfl', 'soccer', 'game', 'score', 'points', 'yards', 'player']):
+                    details['sports_count'] += 1
+                elif any(k in title for k in ['spx', 'nasdaq', 'bitcoin', 'eth', 'rate', 'fed', 'price']):
+                    details['finance_count'] += 1
+                
+                # Check for climate markets
+                if any(word in title for word in ['temperature', 'climate', 'degrees', 'celsius', 'fahrenheit', 'heat']):
+                    details['climate_markets_found'] += 1
+                
+                # Check for weather markets
                 if any(word in title for word in weather_keywords):
                     # Check if it's for one of our monitored cities
                     if any(city in title for city in cities):
