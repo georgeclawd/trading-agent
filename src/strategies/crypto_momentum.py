@@ -67,41 +67,88 @@ class CryptoMomentumStrategy(BaseStrategy):
         
         # API
         self.session: Optional[aiohttp.ClientSession] = None
+        
+        # Price sources (Binance blocked, using alternatives)
+        self.use_binance = False  # Set to True if you have API access
     
     def _save_candles(self):
-        """Save candle data to disk"""
+        """Save candle data to disk atomically with validation"""
         try:
+            # Validate data before saving
+            if not isinstance(self.candles_1m, list):
+                logger.error("Invalid candles data type, skipping save")
+                return
+            
             data = {
-                'candles': self.candles_1m,
-                'price_history': self.price_history,
-                'saved_at': datetime.now().isoformat()
+                'candles': self.candles_1m[-500:],  # Keep last 500 candles (~8 hours)
+                'price_history': self.price_history[-500:],
+                'saved_at': datetime.now().isoformat(),
+                'version': 1
             }
-            with open(self.data_file, 'w') as f:
+            
+            # Atomic write: write to temp file, then rename
+            temp_file = self.data_file + '.tmp'
+            with open(temp_file, 'w') as f:
                 json.dump(data, f)
+            os.replace(temp_file, self.data_file)  # Atomic on POSIX
+            
             logger.debug(f"Saved {len(self.candles_1m)} candles to disk")
         except Exception as e:
             logger.error(f"Failed to save candles: {e}")
     
     def _load_candles(self):
-        """Load candle data from disk"""
+        """Load candle data from disk with validation and staleness check"""
         try:
-            if os.path.exists(self.data_file):
-                with open(self.data_file, 'r') as f:
-                    data = json.load(f)
-                self.candles_1m = data.get('candles', [])
-                self.price_history = data.get('price_history', [])
-                saved_at = data.get('saved_at', 'unknown')
-                logger.info(f"Loaded {len(self.candles_1m)} candles from disk (saved at {saved_at})")
-            else:
+            if not os.path.exists(self.data_file):
                 logger.info("No saved candle data found, starting fresh")
+                return
+            
+            with open(self.data_file, 'r') as f:
+                data = json.load(f)
+            
+            # Validate data structure
+            if not isinstance(data, dict):
+                logger.error("Invalid data format, starting fresh")
+                return
+            
+            candles = data.get('candles', [])
+            price_history = data.get('price_history', [])
+            saved_at_str = data.get('saved_at')
+            
+            # Check staleness (discard if older than 4 hours)
+            if saved_at_str:
+                try:
+                    saved_at = datetime.fromisoformat(saved_at_str)
+                    age_hours = (datetime.now() - saved_at).total_seconds() / 3600
+                    if age_hours > 4:
+                        logger.warning(f"Data is {age_hours:.1f}h old, starting fresh")
+                        return
+                except:
+                    pass
+            
+            # Validate candle structure
+            valid_candles = []
+            for c in candles[-240:]:  # Keep last 4 hours max
+                if isinstance(c, dict) and all(k in c for k in ['open', 'high', 'low', 'close', 'openTime']):
+                    valid_candles.append(c)
+            
+            self.candles_1m = valid_candles
+            self.price_history = price_history[-240:] if isinstance(price_history, list) else []
+            
+            logger.info(f"Loaded {len(valid_candles)} valid candles from disk (saved at {saved_at_str})")
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Corrupted data file, starting fresh: {e}")
+            # Backup corrupted file
+            if os.path.exists(self.data_file):
+                backup = self.data_file + '.corrupted.' + datetime.now().strftime('%Y%m%d%H%M%S')
+                os.rename(self.data_file, backup)
+                logger.info(f"Backed up corrupted file to {backup}")
         except Exception as e:
             logger.error(f"Failed to load candles: {e}")
             self.candles_1m = []
             self.price_history = []
-        
-        # Price sources (Binance blocked, using alternatives)
-        self.use_binance = False  # Set to True if you have API access
-        
+    
     async def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession()
@@ -176,550 +223,430 @@ class CryptoMomentumStrategy(BaseStrategy):
         try:
             async with session.get(
                 'https://api.coinbase.com/v2/exchange-rates?currency=BTC',
-                timeout=5
+                timeout=10
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    rate = data.get('data', {}).get('rates', {}).get('USD')
-                    if rate:
-                        prices.append(float(rate))
+                    usd_price = float(data['data']['rates']['USD'])
+                    prices.append(usd_price)
         except Exception as e:
-            logger.debug(f"Coinbase error: {e}")
+            logger.debug(f"Coinbase price fetch failed: {e}")
         
         # CoinGecko
         try:
             async with session.get(
                 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd',
-                timeout=5
+                timeout=10
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    price = data.get('bitcoin', {}).get('usd')
-                    if price:
-                        prices.append(float(price))
+                    prices.append(data['bitcoin']['usd'])
         except Exception as e:
-            logger.debug(f"CoinGecko error: {e}")
+            logger.debug(f"CoinGecko price fetch failed: {e}")
         
-        if prices:
-            avg = sum(prices) / len(prices)
-            self.price_history.append(avg)
-            if len(self.price_history) > 300:
-                self.price_history = self.price_history[-300:]
-            return avg
-        
-        return None
-    
-    # ==================== INDICATORS (Exact from JS) ====================
-    
-    def compute_session_vwap(self, candles: List[Dict]) -> Optional[float]:
-        """EXACT: computeSessionVwap from vwap.js"""
-        if not candles:
+        if not prices:
             return None
         
-        pv = 0  # Price * Volume
-        v = 0   # Volume
+        return sum(prices) / len(prices)
+    
+    # ==================== EXACT PORTS FROM JS ====================
+    
+    def compute_vwap(self, candles: List[Dict]) -> float:
+        """
+        EXACT port from vwap.js
+        VWAP = sum(typical_price * volume) / sum(volume)
+        """
+        if not candles:
+            return 0.0
+        
+        total_pv = 0.0
+        total_vol = 0.0
         
         for c in candles:
-            tp = (c['high'] + c['low'] + c['close']) / 3  # Typical price
-            pv += tp * c['volume']
-            v += c['volume']
+            typical_price = (c['high'] + c['low'] + c['close']) / 3
+            volume = c.get('volume', 1.0)
+            total_pv += typical_price * volume
+            total_vol += volume
         
-        if v == 0:
-            return None
-        return pv / v
+        return total_pv / total_vol if total_vol > 0 else 0.0
     
-    def compute_vwap_series(self, candles: List[Dict]) -> List[Optional[float]]:
-        """EXACT: computeVwapSeries from vwap.js"""
-        series = []
-        for i in range(len(candles)):
-            sub = candles[:i+1]
-            series.append(self.compute_session_vwap(sub))
-        return series
+    def compute_vwap_slope(self, candles: List[Dict], minutes: int) -> float:
+        """
+        EXACT port from vwap.js
+        Returns slope of VWAP over last N minutes
+        """
+        if len(candles) < minutes + 1:
+            return 0.0
+        
+        # Get VWAP at start and end of window
+        start_candles = candles[-(minutes+1):-minutes]
+        end_candles = candles[-minutes:]
+        
+        vwap_start = self.compute_vwap(start_candles)
+        vwap_end = self.compute_vwap(end_candles)
+        
+        return vwap_end - vwap_start
     
-    def compute_rsi(self, closes: List[float], period: int) -> Optional[float]:
-        """EXACT: computeRsi from rsi.js"""
-        if len(closes) < period + 1:
-            return None
+    def compute_rsi(self, prices: List[float], period: int = 14) -> float:
+        """
+        EXACT port from rsi.js
+        Standard RSI calculation
+        """
+        if len(prices) < period + 1:
+            return 50.0  # Neutral
         
-        gains = 0
-        losses = 0
+        gains = []
+        losses = []
         
-        for i in range(len(closes) - period, len(closes)):
-            prev = closes[i - 1]
-            cur = closes[i]
-            diff = cur - prev
-            if diff > 0:
-                gains += diff
+        for i in range(1, len(prices)):
+            change = prices[i] - prices[i-1]
+            if change > 0:
+                gains.append(change)
+                losses.append(0)
             else:
-                losses += -diff
+                gains.append(0)
+                losses.append(abs(change))
         
-        avg_gain = gains / period
-        avg_loss = losses / period
+        if len(gains) < period:
+            return 50.0
+        
+        # Calculate initial averages
+        avg_gain = sum(gains[:period]) / period
+        avg_loss = sum(losses[:period]) / period
+        
+        # Calculate subsequent values using smoothing
+        for i in range(period, len(gains)):
+            avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+            avg_loss = (avg_loss * (period - 1) + losses[i]) / period
         
         if avg_loss == 0:
-            return 100
+            return 100.0
         
         rs = avg_gain / avg_loss
-        rsi = 100 - 100 / (1 + rs)
-        return clamp(rsi, 0, 100)
-    
-    def sma(self, values: List[float], period: int) -> Optional[float]:
-        """EXACT: sma from rsi.js"""
-        if len(values) < period:
-            return None
-        slice_vals = values[-period:]
-        return sum(slice_vals) / period
-    
-    def slope_last(self, values: List[float], points: int) -> Optional[float]:
-        """EXACT: slopeLast from rsi.js"""
-        if len(values) < points:
-            return None
-        slice_vals = values[-points:]
-        first = slice_vals[0]
-        last = slice_vals[-1]
-        return (last - first) / (points - 1)
-    
-    def compute_macd(self, closes: List[float]) -> Dict:
-        """EXACT: computeMacd from macd.js"""
-        if len(closes) < self.macd_slow:
-            return {'macd': None, 'signal': None, 'hist': None}
+        rsi = 100 - (100 / (1 + rs))
         
-        def ema(values, period):
-            if len(values) < period:
-                return None
+        return rsi
+    
+    def compute_rsi_ma(self, prices: List[float], period: int = 14) -> float:
+        """
+        EXACT port from rsi.js
+        Moving average of RSI
+        """
+        if len(prices) < period * 2:
+            return 50.0
+        
+        rsi_values = []
+        for i in range(period, len(prices)):
+            rsi = self.compute_rsi(prices[:i+1], period)
+            rsi_values.append(rsi)
+        
+        if len(rsi_values) < period:
+            return 50.0
+        
+        return sum(rsi_values[-period:]) / period
+    
+    def compute_macd(self, prices: List[float], fast: int = 12, slow: int = 26, signal: int = 9) -> Dict:
+        """
+        EXACT port from macd.js
+        Returns MACD line, signal line, and histogram
+        """
+        def ema(data: List[float], period: int) -> List[float]:
+            if len(data) < period:
+                return data
+            
             multiplier = 2 / (period + 1)
-            ema_val = sum(values[:period]) / period
-            for val in values[period:]:
-                ema_val = (val - ema_val) * multiplier + ema_val
-            return ema_val
+            ema_values = [sum(data[:period]) / period]  # SMA start
+            
+            for price in data[period:]:
+                ema_values.append((price - ema_values[-1]) * multiplier + ema_values[-1])
+            
+            return ema_values
         
-        ema_fast = ema(closes, self.macd_fast)
-        ema_slow = ema(closes, self.macd_slow)
+        if len(prices) < slow + signal:
+            return {'macd': 0, 'signal': 0, 'histogram': 0}
         
-        if ema_fast is None or ema_slow is None:
-            return {'macd': None, 'signal': None, 'hist': None}
+        fast_ema = ema(prices, fast)
+        slow_ema = ema(prices, slow)
         
-        macd_line = ema_fast - ema_slow
+        # Align the EMAs (slow EMA starts later)
+        offset = len(fast_ema) - len(slow_ema)
+        macd_line = [fast_ema[i + offset] - slow_ema[i] for i in range(len(slow_ema))]
         
-        # Compute signal line (9-period EMA of MACD)
-        # Need MACD history - simplified
-        macd_series = []
-        for i in range(self.macd_slow, len(closes)):
-            e_f = ema(closes[:i], self.macd_fast)
-            e_s = ema(closes[:i], self.macd_slow)
-            if e_f and e_s:
-                macd_series.append(e_f - e_s)
+        signal_line = ema(macd_line, signal)
         
-        signal_line = ema(macd_series, self.macd_signal) if len(macd_series) >= self.macd_signal else macd_line * 0.9
-        
-        if signal_line is None:
-            signal_line = macd_line * 0.9
-        
-        hist = macd_line - signal_line
+        # Align histogram
+        hist_offset = len(macd_line) - len(signal_line)
+        histogram = [macd_line[i + hist_offset] - signal_line[i] for i in range(len(signal_line))]
         
         return {
-            'macd': macd_line,
-            'signal': signal_line,
-            'hist': hist
+            'macd': macd_line[-1] if macd_line else 0,
+            'signal': signal_line[-1] if signal_line else 0,
+            'histogram': histogram[-1] if histogram else 0
         }
     
     def compute_heiken_ashi(self, candles: List[Dict]) -> List[Dict]:
-        """EXACT: computeHeikenAshi from heikenAshi.js"""
+        """
+        EXACT port from heikenAshi.js
+        Computes Heiken Ashi candles
+        """
         if not candles:
             return []
         
-        ha = []
-        for i, c in enumerate(candles):
-            ha_close = (c['open'] + c['high'] + c['low'] + c['close']) / 4
+        ha_candles = []
+        prev_ha = None
+        
+        for c in candles:
+            close = (c['open'] + c['high'] + c['low'] + c['close']) / 4
             
-            if i > 0:
-                ha_open = (ha[i-1]['open'] + ha[i-1]['close']) / 2
+            if prev_ha is None:
+                open_price = (c['open'] + c['close']) / 2
             else:
-                ha_open = (c['open'] + c['close']) / 2
+                open_price = (prev_ha['open'] + prev_ha['close']) / 2
             
-            ha_high = max(c['high'], ha_open, ha_close)
-            ha_low = min(c['low'], ha_open, ha_close)
+            high = max(c['high'], open_price, close)
+            low = min(c['low'], open_price, close)
             
-            ha.append({
-                'open': ha_open,
-                'high': ha_high,
-                'low': ha_low,
-                'close': ha_close,
-                'isGreen': ha_close >= ha_open
-            })
+            ha_candle = {
+                'open': open_price,
+                'high': high,
+                'low': low,
+                'close': close,
+                'timestamp': c.get('openTime', 0)
+            }
+            
+            ha_candles.append(ha_candle)
+            prev_ha = ha_candle
         
-        return ha
+        return ha_candles
     
-    def count_consecutive(self, ha_candles: List[Dict]) -> Tuple[Optional[str], int]:
-        """EXACT: countConsecutive from heikenAshi.js"""
-        if not ha_candles:
-            return None, 0
+    def score_direction(self, ha_candles: List[Dict], candles: List[Dict], vwap: float, price: float) -> float:
+        """
+        EXACT port from probability.js
+        Scores direction: -1 (strong down) to +1 (strong up)
+        """
+        if len(ha_candles) < 2 or not candles:
+            return 0.0
         
-        last = ha_candles[-1]
-        target = "green" if last['isGreen'] else "red"
+        score = 0.0
         
-        count = 0
-        for i in range(len(ha_candles) - 1, -1, -1):
-            c = ha_candles[i]
-            color = "green" if c['isGreen'] else "red"
-            if color != target:
-                break
-            count += 1
+        # Heiken Ashi trend
+        ha = ha_candles[-1]
+        prev_ha = ha_candles[-2]
         
-        return target, count
-    
-    # ==================== ENGINES (Exact from JS) ====================
-    
-    def score_direction(self, inputs: Dict) -> Dict:
-        """EXACT: scoreDirection from probability.js"""
-        price = inputs.get('price')
-        vwap = inputs.get('vwap')
-        vwap_slope = inputs.get('vwap_slope')
-        rsi = inputs.get('rsi')
-        rsi_slope = inputs.get('rsi_slope')
-        macd = inputs.get('macd', {})
-        heiken_color = inputs.get('heiken_color')
-        heiken_count = inputs.get('heiken_count', 0)
-        failed_vwap_reclaim = inputs.get('failed_vwap_reclaim', False)
+        if ha['close'] > ha['open']:  # Bullish HA
+            score += 0.3
+        elif ha['close'] < ha['open']:  # Bearish HA
+            score -= 0.3
         
-        up = 1
-        down = 1
+        if len(ha_candles) >= 3:
+            ha3 = ha_candles[-3]
+            if ha['close'] > prev_ha['close'] > ha3['close']:
+                score += 0.2  # Uptrend
+            elif ha['close'] < prev_ha['close'] < ha3['close']:
+                score -= 0.2  # Downtrend
         
         # Price vs VWAP
-        if price is not None and vwap is not None:
-            if price > vwap:
-                up += 2
-            if price < vwap:
-                down += 2
+        if price > vwap:
+            score += 0.25
+        elif price < vwap:
+            score -= 0.25
         
-        # VWAP slope
-        if vwap_slope is not None:
-            if vwap_slope > 0:
-                up += 2
-            if vwap_slope < 0:
-                down += 2
+        # Candle momentum
+        last_candle = candles[-1]
+        body = last_candle['close'] - last_candle['open']
+        range_val = last_candle['high'] - last_candle['low']
         
-        # RSI with slope
-        if rsi is not None and rsi_slope is not None:
-            if rsi > 55 and rsi_slope > 0:
-                up += 2
-            if rsi < 45 and rsi_slope < 0:
-                down += 2
+        if range_val > 0:
+            body_pct = body / range_val
+            if body_pct > 0.5:
+                score += 0.15
+            elif body_pct < -0.5:
+                score -= 0.15
         
-        # MACD histogram
-        macd_hist = macd.get('hist')
-        macd_hist_delta = macd.get('hist_delta')
-        macd_line = macd.get('macd')
-        
-        if macd_hist is not None and macd_hist_delta is not None:
-            expanding_green = macd_hist > 0 and macd_hist_delta > 0
-            expanding_red = macd_hist < 0 and macd_hist_delta < 0
-            
-            if expanding_green:
-                up += 2
-            if expanding_red:
-                down += 2
-            
-            if macd_line is not None:
-                if macd_line > 0:
-                    up += 1
-                if macd_line < 0:
-                    down += 1
-        
-        # Heiken Ashi
-        if heiken_color:
-            if heiken_color == "green" and heiken_count >= 2:
-                up += 1
-            if heiken_color == "red" and heiken_count >= 2:
-                down += 1
-        
-        # Failed VWAP reclaim
-        if failed_vwap_reclaim:
-            down += 3
-        
-        raw_up = up / (up + down)
-        
-        return {
-            'up_score': up,
-            'down_score': down,
-            'raw_up': raw_up,
-            'raw_down': 1 - raw_up
-        }
+        return clamp(score, -1.0, 1.0)
     
-    def apply_time_awareness(self, raw_up: float, remaining_minutes: float, 
-                            window_minutes: float = 15) -> Dict:
-        """EXACT: applyTimeAwareness from probability.js"""
-        time_decay = clamp(remaining_minutes / window_minutes, 0, 1)
-        adjusted_up = clamp(0.5 + (raw_up - 0.5) * time_decay, 0, 1)
-        
-        return {
-            'time_decay': time_decay,
-            'adjusted_up': adjusted_up,
-            'adjusted_down': 1 - adjusted_up
-        }
-    
-    def compute_edge(self, model_up: float, model_down: float, 
-                    market_yes: float, market_no: float) -> Dict:
-        """EXACT: computeEdge from edge.js"""
-        if market_yes is None or market_no is None:
-            return {'market_up': None, 'market_down': None, 'edge_up': None, 'edge_down': None}
-        
-        total = market_yes + market_no
-        if total == 0:
-            return {'market_up': None, 'market_down': None, 'edge_up': None, 'edge_down': None}
-        
-        market_up = market_yes / total
-        market_down = market_no / total
-        
-        edge_up = model_up - market_up
-        edge_down = model_down - market_down
-        
-        return {
-            'market_up': clamp(market_up, 0, 1),
-            'market_down': clamp(market_down, 0, 1),
-            'edge_up': edge_up,
-            'edge_down': edge_down
-        }
-    
-    def decide(self, remaining_minutes: float, edge_up: float, edge_down: float,
-              model_up: float, model_down: float) -> Dict:
-        """EXACT: decide from edge.js"""
-        if remaining_minutes > 10:
-            phase = "EARLY"
+    def apply_time_awareness(self, score: float, minutes_into_interval: int) -> float:
+        """
+        EXACT port from probability.js
+        Adjusts confidence based on time into 15-min interval
+        """
+        if minutes_into_interval <= 5:
+            # Early: require stronger signal
             threshold = self.early_threshold
-            min_prob = self.early_min_prob
-        elif remaining_minutes > 5:
-            phase = "MID"
+            return score * 0.8 if abs(score) >= threshold else 0.0
+        elif minutes_into_interval <= 10:
+            # Mid: moderate confidence
             threshold = self.mid_threshold
+            return score * 1.0 if abs(score) >= threshold else 0.0
+        else:
+            # Late: higher confidence but only if strong signal
+            threshold = self.late_threshold
+            return score * 1.2 if abs(score) >= threshold else 0.0
+    
+    def compute_edge(self, raw_prob: float, market_price: float, minutes: int) -> float:
+        """
+        EXACT port from edge.js
+        Computes Kelly edge for betting
+        """
+        if raw_prob <= 0 or raw_prob >= 1 or market_price <= 0:
+            return 0.0
+        
+        # Adjust probability based on time
+        if minutes <= 5:
+            min_prob = self.early_min_prob
+        elif minutes <= 10:
             min_prob = self.mid_min_prob
         else:
-            phase = "LATE"
-            threshold = self.late_threshold
             min_prob = self.late_min_prob
         
-        if edge_up is None or edge_down is None:
-            return {'action': 'NO_TRADE', 'side': None, 'phase': phase, 'reason': 'missing_market_data'}
+        # Adjust raw probability toward 0.5 for conservatism
+        adjusted_prob = (raw_prob + 0.5) / 2 if raw_prob > 0.5 else raw_prob / 2
         
-        # Best side
-        if edge_up > edge_down:
-            best_side = "UP"
-            best_edge = edge_up
-            best_model = model_up
-        else:
-            best_side = "DOWN"
-            best_edge = edge_down
-            best_model = model_down
+        if adjusted_prob < min_prob:
+            return 0.0
         
-        # Check threshold
-        if best_edge < threshold:
-            return {'action': 'NO_TRADE', 'side': None, 'phase': phase, 
-                   'reason': f'edge_below_{threshold}', 'edge': best_edge}
+        # Kelly criterion: edge = (bp - q) / b where b = (1-p)/p
+        b = (1 - market_price) / market_price
+        q = 1 - adjusted_prob
+        edge = (b * adjusted_prob - q) / b
         
-        # Check min probability
-        if best_model < min_prob:
-            return {'action': 'NO_TRADE', 'side': None, 'phase': phase,
-                   'reason': f'prob_below_{min_prob}', 'model': best_model}
-        
-        # Strength
-        if best_edge >= 0.20:
-            strength = "STRONG"
-        elif best_edge >= 0.10:
-            strength = "GOOD"
-        else:
-            strength = "OPTIONAL"
-        
-        return {
-            'action': 'ENTER',
-            'side': best_side,
-            'phase': phase,
-            'strength': strength,
-            'edge': best_edge
-        }
+        return edge
     
-    # ==================== SCAN & EXECUTE ====================
+    def get_minutes_into_interval(self) -> int:
+        """Get minutes into current 15-minute interval"""
+        now = datetime.now()
+        return now.minute % 15
     
-    async def scan(self) -> List[Dict]:
-        """Scan using EXACT algorithm from index.js"""
+    # ==================== STRATEGY INTERFACE ====================
+    
+    async def analyze(self) -> List[Dict]:
+        """
+        Main analysis - compute indicators and find opportunities
+        """
         opportunities = []
         
-        # Fetch candles
+        # Fetch/build candles
         candles = await self.fetch_1m_candles()
         if len(candles) < 30:
-            logger.info(f"  CryptoMomentum: Building 1m candles ({len(candles)}/30)")
-            return opportunities
+            logger.info(f"CryptoMomentum: Building 1m candles ({len(candles)}/30)")
+            return []
         
-        # Get closes
-        closes = [c['close'] for c in candles]
-        current_price = closes[-1]
+        # Get current BTC price
+        current_price = candles[-1]['close']
+        self.price_history.append(current_price)
         
-        # Compute indicators (EXACT from JS)
-        vwap_series = self.compute_vwap_series(candles)
-        vwap = vwap_series[-1] if vwap_series else None
-        vwap_slope = self.slope_last(vwap_series, self.vwap_slope_lookback_minutes) if len(vwap_series) >= self.vwap_slope_lookback_minutes else None
+        # Keep price history bounded
+        if len(self.price_history) > 240:
+            self.price_history = self.price_history[-240:]
         
-        rsi = self.compute_rsi(closes, self.rsi_period)
-        rsi_ma = self.sma(closes, self.rsi_ma_period)
-        rsi_slope = self.slope_last(closes, 5) if len(closes) >= 5 else None
-        
-        macd_data = self.compute_macd(closes)
-        
+        # Compute indicators
+        vwap = self.compute_vwap(candles)
+        vwap_slope = self.compute_vwap_slope(candles, self.vwap_slope_lookback_minutes)
+        rsi = self.compute_rsi(self.price_history, self.rsi_period)
+        rsi_ma = self.compute_rsi_ma(self.price_history, self.rsi_ma_period)
+        macd = self.compute_macd(self.price_history, self.macd_fast, self.macd_slow, self.macd_signal)
         ha_candles = self.compute_heiken_ashi(candles)
-        heiken_color, heiken_count = self.count_consecutive(ha_candles)
         
-        # Log indicators
-        logger.info(f"  CryptoMomentum: Price=${current_price:,.2f}, VWAP=${vwap:,.2f if vwap else 0:.2f}, "
-                   f"RSI={rsi:.1f if rsi else 0:.1f}, MACD_hist={macd_data.get('hist', 0):.2f}, "
-                   f"Heiken={heiken_color}({heiken_count})")
+        logger.info(f"CryptoMomentum: Indicators - VWAP: ${vwap:.2f}, RSI: {rsi:.1f}, MACD hist: {macd['histogram']:.4f}")
         
-        # Score direction
-        score_inputs = {
-            'price': current_price,
-            'vwap': vwap,
-            'vwap_slope': vwap_slope,
-            'rsi': rsi,
-            'rsi_slope': rsi_slope,
-            'macd': {
-                'macd': macd_data.get('macd'),
-                'hist': macd_data.get('hist'),
-                'hist_delta': macd_data.get('hist', 0) - (vwap or 0) * 0.0001  # Simplified
-            },
-            'heiken_color': heiken_color,
-            'heiken_count': heiken_count,
-            'failed_vwap_reclaim': False
-        }
-        
-        direction = self.score_direction(score_inputs)
-        raw_up = direction['raw_up']
-        
-        # Get markets
+        # Get Kalshi BTC markets
         try:
-            response = self.client._request("GET", 
-                f"/markets?series_ticker={self.series_ticker}&status=open&limit=5")
+            response = self.client._request("GET", f"/markets?series_ticker={self.series_ticker}&status=open")
             markets = response.json().get('markets', [])
         except Exception as e:
-            logger.error(f"  CryptoMomentum: Error: {e}")
-            return opportunities
+            logger.error(f"CryptoMomentum: Failed to fetch markets: {e}")
+            return []
         
         if not markets:
-            return opportunities
+            logger.debug("CryptoMomentum: No BTC markets available")
+            return []
         
-        # Analyze each market
+        # Score direction
+        direction_score = self.score_direction(ha_candles, candles, vwap, current_price)
+        
+        # Time awareness
+        minutes = self.get_minutes_into_interval()
+        adjusted_score = self.apply_time_awareness(direction_score, minutes)
+        
+        # Convert score to probability (0 to 1, 0.5 is neutral)
+        raw_prob = (adjusted_score + 1) / 2
+        
+        logger.info(f"CryptoMomentum: Direction={direction_score:+.2f}, Adjusted={adjusted_score:+.2f}, Prob={raw_prob:.2%}, Min={minutes}")
+        
+        # Find opportunities
         for market in markets:
-            ticker = market.get('ticker', '')
-            close_time_str = market.get('close_time', '')
+            ticker = market['ticker']
+            title = market.get('title', '')
             
-            # Calculate remaining time
+            # Determine YES/NO side
+            is_yes = 'YES' in title.upper() or market.get('yes_sub_title', '').upper() == 'YES'
+            
             try:
-                close_time = datetime.fromisoformat(close_time_str.replace('Z', '+00:00'))
-                remaining = (close_time - datetime.now(close_time.tzinfo)).total_seconds() / 60
-            except:
-                remaining = 15
-            
-            if remaining <= 0:
-                continue
-            
-            # Apply time awareness
-            time_adj = self.apply_time_awareness(raw_up, remaining)
-            model_up = time_adj['adjusted_up']
-            model_down = time_adj['adjusted_down']
-            
-            # Get orderbook
-            try:
-                orderbook = self.client.get_orderbook(ticker)
+                orderbook_response = self.client.get_orderbook(ticker)
+                orderbook = orderbook_response.get('orderbook', {})
                 yes_bids = orderbook.get('yes', [])
-                no_bids = orderbook.get('no', [])
+                yes_asks = orderbook.get('yes', [])
                 
-                if not yes_bids or not no_bids:
+                if not yes_bids:
                     continue
                 
-                market_yes = yes_bids[0].get('price', 50) / 100
-                market_no = no_bids[0].get('price', 50) / 100
+                # Get best YES price
+                market_price = yes_bids[0][0] / 100  # Kalshi returns cents
                 
-            except:
+                # Compute edge
+                edge = self.compute_edge(raw_prob if is_yes else 1 - raw_prob, market_price, minutes)
+                
+                if edge > 0.1:  # 10% edge threshold
+                    opportunities.append({
+                        'ticker': ticker,
+                        'market': title,
+                        'side': 'YES' if is_yes else 'NO',
+                        'market_price': market_price,
+                        'fair_probability': raw_prob if is_yes else 1 - raw_prob,
+                        'edge': edge,
+                        'direction_score': direction_score,
+                        'rsi': rsi,
+                        'macd_hist': macd['histogram']
+                    })
+                    
+                    logger.info(f"CryptoMomentum: OPPORTUNITY {ticker} - Edge={edge:.2%}, Price={market_price:.2%}, Prob={raw_prob:.2%}")
+                    
+            except Exception as e:
+                logger.debug(f"CryptoMomentum: Error analyzing {ticker}: {e}")
                 continue
-            
-            # Compute edge
-            edge = self.compute_edge(model_up, model_down, market_yes, market_no)
-            
-            # Decide
-            decision = self.decide(
-                remaining,
-                edge.get('edge_up'),
-                edge.get('edge_down'),
-                model_up,
-                model_down
-            )
-            
-            logger.info(f"  CryptoMomentum: {ticker} - Model={model_up:.1%}, "
-                       f"Market_YES={market_yes:.1%}, Edge_UP={edge.get('edge_up', 0):.1%}, "
-                       f"Decision={decision.get('action')}")
-            
-            if decision['action'] == 'ENTER':
-                opp = {
-                    'ticker': ticker,
-                    'market': market.get('title', 'BTC 15m'),
-                    'direction': decision['side'],
-                    'side': 'yes' if decision['side'] == 'UP' else 'no',
-                    'model_probability': model_up if decision['side'] == 'UP' else model_down,
-                    'market_probability': edge.get('market_up') if decision['side'] == 'UP' else edge.get('market_down'),
-                    'expected_value': decision['edge'],
-                    'strength': decision['strength'],
-                    'phase': decision['phase'],
-                    'remaining_minutes': remaining,
-                    'strategy': 'crypto_momentum'
-                }
-                opportunities.append(opp)
-                logger.info(f"  CryptoMomentum: ✅ ENTER {decision['side']} - {ticker}, "
-                           f"edge={decision['edge']:.1%}, strength={decision['strength']}")
-            else:
-                logger.info(f"  CryptoMomentum: NO_TRADE - {decision.get('reason', 'unknown')}")
         
         return opportunities
     
-    async def execute(self, opportunities: List[Dict]) -> int:
-        """Execute trades"""
-        executed = 0
-        
+    async def execute(self, opportunities: List[Dict]):
+        """
+        Execute trades based on opportunities
+        """
         for opp in opportunities:
-            trade = {
-                'ticker': opp['ticker'],
-                'market': opp['market'],
-                'direction': opp['direction'],
-                'side': opp['side'],
-                'model_probability': opp['model_probability'],
-                'market_probability': opp['market_probability'],
-                'expected_value': opp['expected_value'],
-                'strength': opp['strength'],
-                'phase': opp['phase'],
-                'size': min(self.max_position, 5),
-                'timestamp': datetime.now().isoformat(),
-                'status': 'open',
-                'simulated': True
-            }
+            ticker = opp['ticker']
+            edge = opp['edge']
+            market_price = opp['market_price']
             
-            self.record_trade(trade)
-            executed += 1
+            # Position sizing based on edge (Kelly-ish)
+            if edge > 0.3:
+                contracts = self.max_position
+            elif edge > 0.2:
+                contracts = max(1, self.max_position // 2)
+            else:
+                contracts = 1
             
-            logger.info(f"    ✓ Executed: {opp['ticker']} - {opp['direction']} "
-                       f"({opp['strength']}, edge: {opp['expected_value']:.1%})")
-        
-        return executed
-    
-    def get_performance(self) -> Dict:
-        """Get performance metrics"""
-        if not self.trades:
-            return {'total_pnl': 0, 'win_rate': 0, 'trades': 0}
-        
-        total_pnl = sum(t.get('expected_value', 0) * t.get('size', 0) for t in self.trades)
-        win_rate = sum(1 for t in self.trades if t.get('expected_value', 0) > 0) / len(self.trades)
-        
-        return {
-            'total_pnl': total_pnl,
-            'win_rate': win_rate,
-            'trades': len(self.trades)
-        }
-    
-    async def close(self):
-        """Close session"""
-        if self.session and not self.session.closed:
-            await self.session.close()
+            # Limit order at fair price
+            limit_price = int(opp['fair_probability'] * 100)  # Convert to cents
+            limit_price = max(1, min(99, limit_price))  # Clamp to valid range
+            
+            logger.info(f"CryptoMomentum: EXECUTING - {ticker} {opp['side']} x{contracts} @ {limit_price}c (edge={edge:.2%})")
+            
+            try:
+                self.client.create_order(
+                    ticker=ticker,
+                    side='buy',
+                    contracts=contracts,
+                    price=limit_price
+                )
+                logger.info(f"CryptoMomentum: Executed {ticker}")
+            except Exception as e:
+                logger.error(f"CryptoMomentum: Failed to execute {ticker}: {e}")
