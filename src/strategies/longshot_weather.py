@@ -266,9 +266,17 @@ class LongshotWeatherStrategy(BaseStrategy):
                         'no_price': no_price,
                         'volume': m.get('volume', 0)
                     })
-            except:
+                    
+                    # Debug log first few liquid markets found
+                    if len(liquid_weather) <= 3:
+                        logger.info(f"  LongshotWeather: Found liquid - {ticker[:30]} YES={yes_price:.1%} NO={no_price:.1%}")
+            except Exception as e:
+                # Debug log errors for first few markets
+                if len(liquid_weather) < 3:
+                    logger.debug(f"  LongshotWeather: Error on {ticker[:30]}: {str(e)[:50]}")
                 continue
         
+        logger.info(f"  LongshotWeather: Checked {len([m for m in markets if any(k in m.get('title','').lower() for k in ['temp', 'temperature', 'high', 'low', 'rain', 'snow'])])} weather markets")
         logger.info(f"  LongshotWeather: Found {len(liquid_weather)} weather markets WITH LIQUIDITY")
         
         # Second pass: Filter for cheap markets and extract cities
