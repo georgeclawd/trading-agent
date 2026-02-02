@@ -101,19 +101,27 @@ class WeatherPredictionStrategy(BaseStrategy):
         
         return executed
     
-    def _calculate_position_size(self, opportunity: Dict) -> float:
+    def _calculate_position_size(self, opportunity: Dict) -> int:
         """Calculate position size based on EV and bankroll"""
         ev = opportunity.get('expected_value', 0)
         
-        logger.debug(f"WeatherPrediction: Calculating position size - EV={ev}, min_ev={self.min_ev}")
+        # EV might be stored as decimal (0.05 = 5%) or already as percentage (5.0 = 5%)
+        # Normalize to percentage points
+        if ev < 1.0:  # Assume decimal format (0.05 = 5%)
+            ev_percent = ev * 100
+        else:  # Already percentage (5.0 = 5%)
+            ev_percent = ev
         
+        logger.debug(f"WeatherPrediction: EV={ev}, ev_percent={ev_percent}, min_ev={self.min_ev}")
+        
+        # min_ev is stored as decimal (0.05), so compare with raw ev
         if ev < self.min_ev:
             logger.debug(f"WeatherPrediction: EV {ev} < min_ev {self.min_ev}, returning 0")
             return 0
         
-        # Simple sizing: larger EV = larger position
-        max_position = self.config.get('max_position_size', 5)  # $5 max for testing
-        size = min(max_position, max(1, ev * 100))  # $1 per 1% EV
+        # Simple sizing: $1 per 1% EV, max $5
+        max_position = self.config.get('max_position_size', 5)
+        size = int(min(max_position, max(1, ev_percent)))
         
         logger.debug(f"WeatherPrediction: Position size calculated: {size}")
         return size
