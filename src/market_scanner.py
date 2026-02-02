@@ -286,8 +286,18 @@ class MarketScanner:
         if not city_coords:
             return None
         
-        # Fetch real weather data
-        weather_data = await self._fetch_weather(city_coords[0], city_coords[1])
+        # Use cached weather data if available (avoid repeated API calls for same city)
+        cache_key = f"{city_coords[0]},{city_coords[1]}"
+        if hasattr(self, '_weather_cache') and cache_key in self._weather_cache:
+            weather_data = self._weather_cache[cache_key]
+            logger.debug(f"Using cached weather data for {city_name}")
+        else:
+            # Fetch real weather data
+            weather_data = await self._fetch_weather(city_coords[0], city_coords[1])
+            # Cache it
+            if not hasattr(self, '_weather_cache'):
+                self._weather_cache = {}
+            self._weather_cache[cache_key] = weather_data
         
         if not weather_data:
             return None
@@ -533,6 +543,9 @@ class MarketScanner:
         if not self.session:
             self.session = aiohttp.ClientSession()
         
+        # Rate limiting: wait 0.5 seconds between API calls to avoid 429 errors
+        await asyncio.sleep(0.5)
+        
         try:
             url = (
                 f"https://api.open-meteo.com/v1/forecast?"
@@ -546,6 +559,15 @@ class MarketScanner:
             async with self.session.get(url, timeout=10) as response:
                 if response.status == 200:
                     return await response.json()
+                elif response.status == 429:
+                    logger.warning(f"Weather API rate limited (429), waiting 5 seconds...")
+                    await asyncio.sleep(5)
+                    # Retry once
+                    async with self.session.get(url, timeout=10) as retry_response:
+                        if retry_response.status == 200:
+                            return await retry_response.json()
+                        else:
+                            logger.error(f"Weather API retry failed: {retry_response.status}")
                 else:
                     logger.error(f"Weather API returned {response.status}")
         except Exception as e:
