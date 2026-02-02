@@ -112,18 +112,16 @@ class WeatherPredictionStrategy(BaseStrategy):
         else:  # Already percentage (5.0 = 5%)
             ev_percent = ev
         
-        logger.debug(f"WeatherPrediction: EV={ev}, ev_percent={ev_percent}, min_ev={self.min_ev}")
-        
         # min_ev is stored as decimal (0.05), so compare with raw ev
         if ev < self.min_ev:
-            logger.debug(f"WeatherPrediction: EV {ev} < min_ev {self.min_ev}, returning 0")
+            logger.info(f"WeatherPrediction: SKIPPING - EV {ev:.4f} < min_ev {self.min_ev}")
             return 0
         
         # Simple sizing: $1 per 1% EV, max $5
         max_position = self.config.get('max_position_size', 5)
         size = int(min(max_position, max(1, ev_percent)))
         
-        logger.debug(f"WeatherPrediction: Position size calculated: {size}")
+        logger.info(f"WeatherPrediction: SIZING - EV={ev:.4f}, ev_percent={ev_percent:.2f}, size={size}")
         return size
     
     def get_performance(self) -> Dict:
