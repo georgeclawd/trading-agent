@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 import logging
 from weather_cache import WeatherCache
+from weather_api import WeatherAPI
 
 logger = logging.getLogger(__name__)
 
@@ -221,15 +222,15 @@ class MarketScanner:
                     if any(city in title for city in ['new york', 'nyc', 'los angeles', 'la', 'chicago', 'london']):
                         weather_markets.append(market)
             
-            # Filter markets: only analyze those with sufficient volume and within next 5 days
+            # Filter markets: analyze with reasonable volume and within next 7 days
             filtered_markets = []
             for m in weather_markets:
-                # Check volume
+                # Check volume - be more lenient for testing
                 volume = m.get('volume', 0)
-                if volume < 500:  # Skip low volume markets
+                if volume < 100:  # Lower threshold from 500 to 100
                     continue
                 
-                # Check date - only analyze next 5 days
+                # Check date - analyze next 7 days (extended from 5)
                 ticker = m.get('ticker', '')
                 import re
                 date_match = re.search(r'-26([A-Z]{3})(\d{2})-', ticker)
@@ -242,8 +243,11 @@ class MarketScanner:
                     market_date = datetime(2026, month_num, int(day_str))
                     days_until = (market_date - datetime.now()).days
                     
-                    if days_until > 5 or days_until < 0:  # Skip if >5 days away or in past
+                    if days_until > 7 or days_until < 0:  # Extended to 7 days
                         continue
+                else:
+                    # If no date in ticker, include it (for testing)
+                    pass
                 
                 filtered_markets.append(m)
             
@@ -562,53 +566,18 @@ class MarketScanner:
         return opportunities
     
     async def _fetch_weather(self, city: str, lat: float, lon: float) -> Optional[Dict]:
-        """Fetch weather forecast from Open-Meteo with caching"""
-        # Check cache first
-        cached = self.weather_cache.get(city, lat, lon, max_age_hours=6)
-        if cached:
-            logger.debug(f"Using cached weather for {city}")
-            return cached
-        
-        # Create session if not exists
-        if not self.session:
-            self.session = aiohttp.ClientSession()
-        
-        # Rate limiting: wait 2 seconds between API calls
-        await asyncio.sleep(2.0)
-        
-        try:
-            url = (
-                f"https://api.open-meteo.com/v1/forecast?"
-                f"latitude={lat}&longitude={lon}"
-                f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode"
-                f"&timezone=auto"
-                f"&temperature_unit=fahrenheit"
-                f"&forecast_days=7"  # Reduced from 14 to 7 days
+        """Fetch weather forecast using OpenWeather API"""
+        # Initialize WeatherAPI on first call
+        if not hasattr(self, '_weather_api'):
+            import subprocess
+            result = subprocess.run(
+                ['pass', 'show', 'openweather/api-key'],
+                capture_output=True, text=True
             )
-            
-            async with self.session.get(url, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    # Cache the result
-                    self.weather_cache.set(city, lat, lon, data, ttl_hours=6)
-                    return data
-                elif response.status == 429:
-                    logger.warning(f"Weather API rate limited (429), waiting 10 seconds...")
-                    await asyncio.sleep(10)
-                    # Retry once
-                    async with self.session.get(url, timeout=10) as retry_response:
-                        if retry_response.status == 200:
-                            data = await retry_response.json()
-                            self.weather_cache.set(city, lat, lon, data, ttl_hours=6)
-                            return data
-                        else:
-                            logger.error(f"Weather API retry failed: {retry_response.status}")
-                else:
-                    logger.error(f"Weather API returned {response.status}")
-        except Exception as e:
-            logger.error(f"Weather fetch error: {e}")
+            api_key = result.stdout.strip().splitlines()[0]
+            self._weather_api = WeatherAPI(api_key)
         
-        return None
+        return await self._weather_api.fetch_forecast(city, lat, lon)
     
     def _create_weather_opportunity(self, city: Dict, weather_data: Dict) -> Optional[Dict]:
         """Create trading opportunity from weather data"""
