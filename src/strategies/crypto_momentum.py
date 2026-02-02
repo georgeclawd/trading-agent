@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 import logging
 import aiohttp
 import asyncio
+import json
+import os
 
 logger = logging.getLogger('CryptoMomentum')
 
@@ -58,8 +60,44 @@ class CryptoMomentumStrategy(BaseStrategy):
         self.candles_1m: List[Dict] = []  # 1-minute OHLCV candles
         self.price_history: List[float] = []  # Raw closes for indicators
         
+        # Persistence
+        self.data_file = '/root/clawd/trading-agent/data/crypto_candles.json'
+        os.makedirs(os.path.dirname(self.data_file), exist_ok=True)
+        self._load_candles()  # Load saved data on init
+        
         # API
         self.session: Optional[aiohttp.ClientSession] = None
+    
+    def _save_candles(self):
+        """Save candle data to disk"""
+        try:
+            data = {
+                'candles': self.candles_1m,
+                'price_history': self.price_history,
+                'saved_at': datetime.now().isoformat()
+            }
+            with open(self.data_file, 'w') as f:
+                json.dump(data, f)
+            logger.debug(f"Saved {len(self.candles_1m)} candles to disk")
+        except Exception as e:
+            logger.error(f"Failed to save candles: {e}")
+    
+    def _load_candles(self):
+        """Load candle data from disk"""
+        try:
+            if os.path.exists(self.data_file):
+                with open(self.data_file, 'r') as f:
+                    data = json.load(f)
+                self.candles_1m = data.get('candles', [])
+                self.price_history = data.get('price_history', [])
+                saved_at = data.get('saved_at', 'unknown')
+                logger.info(f"Loaded {len(self.candles_1m)} candles from disk (saved at {saved_at})")
+            else:
+                logger.info("No saved candle data found, starting fresh")
+        except Exception as e:
+            logger.error(f"Failed to load candles: {e}")
+            self.candles_1m = []
+            self.price_history = []
         
         # Price sources (Binance blocked, using alternatives)
         self.use_binance = False  # Set to True if you have API access
@@ -122,6 +160,10 @@ class CryptoMomentumStrategy(BaseStrategy):
                 last_candle['low'] = min(last_candle['low'], price)
                 last_candle['close'] = price
                 last_candle['volume'] += 1.0
+        
+        # Save to disk periodically (every 5 candles)
+        if len(self.candles_1m) % 5 == 0:
+            self._save_candles()
         
         return self.candles_1m
     
