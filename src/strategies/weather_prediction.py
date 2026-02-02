@@ -43,20 +43,28 @@ class WeatherPredictionStrategy(BaseStrategy):
             # Check if we should trade based on allocation
             position_size = self._calculate_position_size(opp)
             
-            if position_size > 0:
-                ticker = opp.get('ticker')
+            if position_size <= 0:
+                continue
                 
-                # Handle market_price - could be decimal (0.50) or already cents (50)
-                raw_price = opp.get('market_price', 50)
-                if raw_price < 1:  # Decimal format (0.50)
-                    market_price = int(raw_price * 100)
-                else:  # Already cents (50)
-                    market_price = int(raw_price)
-                
-                contracts = int(position_size)
-                logger.info(f"WeatherPrediction: Executing {ticker} - size={position_size}, contracts={contracts}, price={market_price}")
-                
-                if self.dry_run:
+            ticker = opp.get('ticker')
+            
+            # Handle market_price - could be decimal (0.50) or already cents (50)
+            raw_price = opp.get('market_price', 50)
+            if raw_price < 1:  # Decimal format (0.50)
+                market_price = int(raw_price * 100)
+            else:  # Already cents (50)
+                market_price = int(raw_price)
+            
+            contracts = int(position_size)
+            
+            # Check for duplicate BEFORE executing
+            if self.position_manager and self.position_manager.has_open_position(ticker, simulated=self.dry_run):
+                logger.debug(f"WeatherPrediction: Skipping {ticker} - already have open position")
+                continue
+            
+            logger.info(f"WeatherPrediction: Executing {ticker} - size={position_size}, contracts={contracts}, price={market_price}")
+            
+            if self.dry_run:
                     # SIMULATED: Record position without executing
                     recorded = self.record_position(
                         ticker=ticker,

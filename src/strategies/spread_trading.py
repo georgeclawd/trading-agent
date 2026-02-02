@@ -122,6 +122,11 @@ class SpreadTradingStrategy(BaseStrategy):
             ticker = opp['ticker']
             entry_price = int(opp['entry_price'] * 100)  # Convert to cents
             
+            # Check for duplicate BEFORE executing
+            if self.position_manager and self.position_manager.has_open_position(ticker, simulated=self.dry_run):
+                logger.debug(f"SpreadTrading: Skipping {ticker} - already have open position")
+                continue
+            
             if self.dry_run:
                 # SIMULATED: Record position without executing
                 self.record_position(

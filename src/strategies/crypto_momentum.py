@@ -819,17 +819,23 @@ class CryptoMomentumStrategy(BaseStrategy):
             limit_price = int(opp['fair_probability'] * 100)  # Convert to cents
             limit_price = max(1, min(99, limit_price))  # Clamp to valid range
             
+            # Check for duplicate BEFORE executing
+            if self.position_manager and self.position_manager.has_open_position(ticker, simulated=self.dry_run):
+                logger.debug(f"CryptoMomentum: Skipping {ticker} - already have open position")
+                continue
+            
             if self.dry_run:
                 # SIMULATED: Record position without executing
-                self.record_position(
+                success = self.record_position(
                     ticker=ticker,
                     side=opp['side'],
                     contracts=contracts,
                     entry_price=limit_price,
                     market_title=opp['market']
                 )
-                logger.info(f"CryptoMomentum: [SIMULATED] Would execute {ticker} {opp['side']} x{contracts} @ {limit_price}c (edge={edge:.2%})")
-                executed_count += 1
+                if success:
+                    logger.info(f"CryptoMomentum: [SIMULATED] Would execute {ticker} {opp['side']} x{contracts} @ {limit_price}c (edge={edge:.2%})")
+                    executed_count += 1
             else:
                 # REAL: Execute via Kalshi API
                 logger.info(f"CryptoMomentum: [REAL] EXECUTING - {ticker} {opp['side']} x{contracts} @ {limit_price}c (edge={edge:.2f})")

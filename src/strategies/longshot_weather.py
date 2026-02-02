@@ -445,6 +445,11 @@ class LongshotWeatherStrategy(BaseStrategy):
             ticker = opp['ticker']
             market_price_cents = int(opp['market_price'] * 100)
             
+            # Check for duplicate BEFORE executing
+            if self.position_manager and self.position_manager.has_open_position(ticker, simulated=self.dry_run):
+                logger.debug(f"  LongshotWeather: Skipping {ticker[:30]}... - already have open position")
+                continue
+            
             if self.dry_run:
                 # SIMULATED: Record position without executing
                 recorded = self.record_position(
@@ -481,7 +486,8 @@ class LongshotWeatherStrategy(BaseStrategy):
                             logger.info(f"    [REAL] ✓ Executed: {ticker[:30]}... "
                                        f"at {opp['market_price']:.1%}, edge={opp['expected_value']:.1%} Order: {result['order_id']}")
                         else:
-                            logger.debug(f"    [REAL] Skipping {ticker[:30]}... - already have open position")
+                            # Should not happen since we check duplicate first, but log just in case
+                            logger.warning(f"    [REAL] Position record failed after order placed: {ticker[:30]}...")
                     else:
                         logger.error(f"    [REAL] ✗ Order failed: {result}")
                 except Exception as e:
