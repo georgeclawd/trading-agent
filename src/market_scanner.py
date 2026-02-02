@@ -294,15 +294,44 @@ class MarketScanner:
         
         # Get temperature data
         daily = weather_data.get('daily', {})
+        dates = daily.get('time', [])
         max_temps = daily.get('temperature_2m_max', [])
         min_temps = daily.get('temperature_2m_min', [])
         
         if not max_temps or len(max_temps) < 2:
             return None
         
-        # Tomorrow's forecast (index 1)
-        tomorrow_max = max_temps[1]
-        tomorrow_min = min_temps[1] if min_temps else tomorrow_max - 10
+        # Parse date from ticker (e.g., KXHIGHNY-26FEB02-T36 -> 2026-02-02)
+        forecast_max = None
+        forecast_min = None
+        target_date = None
+        
+        import re
+        date_match = re.search(r'-26([A-Z]{3})(\d{2})-', ticker)
+        if date_match:
+            month_str = date_match.group(1)
+            day_str = date_match.group(2)
+            
+            # Convert month abbreviation to number
+            months = {'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+                     'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12}
+            month_num = months.get(month_str, 1)
+            
+            # Find matching date in forecast
+            target_date = f"2026-{month_num:02d}-{day_str}"
+            
+            for i, date in enumerate(dates):
+                if date == target_date:
+                    if i < len(max_temps):
+                        forecast_max = max_temps[i]
+                        forecast_min = min_temps[i] if i < len(min_temps) else forecast_max - 10
+                        break
+        
+        # Fallback to tomorrow if date not found
+        if forecast_max is None:
+            forecast_max = max_temps[1] if len(max_temps) > 1 else max_temps[0]
+            forecast_min = min_temps[1] if len(min_temps) > 1 else forecast_max - 10
+            target_date = dates[1] if len(dates) > 1 else dates[0]
         
         # Determine if this is a temperature market or rain market
         is_temp_market = 'temp' in title_lower or 'temperature' in title_lower or 'high' in ticker.lower()
@@ -321,8 +350,17 @@ class MarketScanner:
             # Try to parse threshold from title
             import re
             
-            # Check for range (e.g., "28-29°")
-            range_match = re.search(r'(\d+)[-\s]to?\s*(\d+)', title)
+            # Check for range (e.g., "28-29°" or "13-14°" or "15-16°")
+            # Try multiple patterns
+            range_match = None
+            
+            # Pattern 1: "be 28-29°" or "be 13-14°"
+            range_match = re.search(r'be\s+(\d+)[-\u2013]\s*(\d+)', title)
+            
+            # Pattern 2: "be 13 to 14°"
+            if not range_match:
+                range_match = re.search(r'be\s+(\d+)\s+to\s+(\d+)', title)
+            
             if range_match:
                 low_temp = int(range_match.group(1))
                 high_temp = int(range_match.group(2))
@@ -330,7 +368,7 @@ class MarketScanner:
                 market_type = 'range'
                 # Probability that temp falls in this range
                 # Simple model: if forecast is in range, high prob
-                if low_temp <= tomorrow_max <= high_temp:
+                if low_temp <= forecast_max <= high_temp:
                     our_probability = 0.85  # Forecast says it's in range
                 else:
                     our_probability = 0.15  # Forecast says it's outside
@@ -343,9 +381,9 @@ class MarketScanner:
                     market_threshold = int(above_match.group(1))
                     market_type = 'above'
                     # Probability temp > threshold
-                    if tomorrow_max > market_threshold:
+                    if forecast_max > market_threshold:
                         our_probability = 0.80
-                    elif tomorrow_max < market_threshold - 3:
+                    elif forecast_max < market_threshold - 3:
                         our_probability = 0.10
                     else:
                         our_probability = 0.50  # Uncertain
@@ -354,9 +392,9 @@ class MarketScanner:
                     market_threshold = int(below_match.group(1))
                     market_type = 'below'
                     # Probability temp < threshold  
-                    if tomorrow_max < market_threshold:
+                    if forecast_max < market_threshold:
                         our_probability = 0.80
-                    elif tomorrow_max > market_threshold + 3:
+                    elif forecast_max > market_threshold + 3:
                         our_probability = 0.10
                     else:
                         our_probability = 0.50  # Uncertain
@@ -365,7 +403,7 @@ class MarketScanner:
                 logger.warning(f"Could not parse temperature threshold from: {title}")
                 return None
                 
-            logger.info(f"      📊 Temp forecast: {tomorrow_max}°F (threshold: {market_threshold}, type: {market_type})")
+            logger.info(f"      📊 Temp forecast for {target_date}: {forecast_max}°F (threshold: {market_threshold}, type: {market_type})")
             
         else:
             # Rain market - use weather code
@@ -490,7 +528,7 @@ class MarketScanner:
         return opportunities
     
     async def _fetch_weather(self, lat: float, lon: float) -> Optional[Dict]:
-        """Fetch weather forecast from Open-Meteo with temperature data"""
+        """Fetch weather forecast from Open-Meteo with temperature data in Fahrenheit"""
         # Create session if not exists
         if not self.session:
             self.session = aiohttp.ClientSession()
@@ -501,6 +539,8 @@ class MarketScanner:
                 f"latitude={lat}&longitude={lon}"
                 f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode"
                 f"&timezone=auto"
+                f"&temperature_unit=fahrenheit"
+                f"&forecast_days=14"
             )
             
             async with self.session.get(url, timeout=10) as response:
