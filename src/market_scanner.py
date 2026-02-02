@@ -54,6 +54,12 @@ class MarketScanner:
         if not self.session:
             self.session = aiohttp.ClientSession()
         
+        # Clear weather cache at start of each scan for fresh data
+        self._weather_cache = {}
+        
+        # Wait a bit at start to avoid rate limits from previous scan
+        await asyncio.sleep(2)
+        
         logger.info("🔍 STARTING MARKET SCAN")
         logger.info("="*60)
         
@@ -290,11 +296,16 @@ class MarketScanner:
         cache_key = f"{city_coords[0]},{city_coords[1]}"
         if hasattr(self, '_weather_cache') and cache_key in self._weather_cache:
             weather_data = self._weather_cache[cache_key]
-            logger.debug(f"Using cached weather data for {city_name}")
+            if weather_data is not None:
+                logger.debug(f"Using cached weather data for {city_name}")
+            else:
+                # Cached value was None (failed fetch), try again
+                weather_data = await self._fetch_weather(city_coords[0], city_coords[1])
+                self._weather_cache[cache_key] = weather_data
         else:
             # Fetch real weather data
             weather_data = await self._fetch_weather(city_coords[0], city_coords[1])
-            # Cache it
+            # Cache it (even if None, to avoid hammering API on failures)
             if not hasattr(self, '_weather_cache'):
                 self._weather_cache = {}
             self._weather_cache[cache_key] = weather_data
@@ -543,8 +554,8 @@ class MarketScanner:
         if not self.session:
             self.session = aiohttp.ClientSession()
         
-        # Rate limiting: wait 0.5 seconds between API calls to avoid 429 errors
-        await asyncio.sleep(0.5)
+        # Rate limiting: wait 1 second between API calls to avoid 429 errors
+        await asyncio.sleep(1.0)
         
         try:
             url = (
