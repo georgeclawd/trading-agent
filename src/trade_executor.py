@@ -1,6 +1,5 @@
 """
-Trade Executor - Executes trades on Polymarket
-Handles wallet, signatures, and order placement
+Fixed Trade Executor - Simulated mode with proper safeguards
 """
 
 import asyncio
@@ -21,79 +20,47 @@ class TradeResult:
 
 class TradeExecutor:
     """
-    Executes trades on Polymarket and other platforms
-    Manages wallet connection and transaction signing
+    Executes trades on Kalshi (SIMULATION MODE)
     """
     
     def __init__(self, config: Dict):
         self.config = config
-        self.wallet_address = None  # Will be set from env/secure storage
-        self.api_endpoint = "https://api.polymarket.com"
+        self.simulation_mode = True  # ALWAYS simulation until explicitly disabled
+        self.executed_trades = []  # Track all simulated trades
         
     async def execute_trade(self, opportunity: Dict, position_size: float) -> Dict:
         """
-        Execute a trade on Polymarket
-        
-        Steps:
-        1. Check wallet balance
-        2. Prepare transaction
-        3. Sign transaction
-        4. Submit order
-        5. Confirm execution
+        Execute a trade (SIMULATION)
         """
         market = opportunity.get('market', 'Unknown')
+        ticker = opportunity.get('ticker', 'Unknown')
         
         try:
-            # Check balance
-            balance = await self._check_balance()
-            if balance < position_size:
-                return {
-                    'success': False,
-                    'error': f'Insufficient balance: ${balance:.2f} < ${position_size:.2f}',
-                    'market': market
-                }
+            # In simulation mode, just log the trade
+            trade_record = {
+                'timestamp': datetime.now().isoformat(),
+                'ticker': ticker,
+                'market': market,
+                'side': 'buy' if opportunity.get('our_probability', 0.5) > opportunity.get('market_probability', 0.5) else 'sell',
+                'size': position_size,
+                'price': opportunity.get('market_probability', 0.5),
+                'expected_value': opportunity.get('expected_value', 0),
+                'simulated': True
+            }
+            self.executed_trades.append(trade_record)
             
-            # Get market details from Polymarket
-            market_id = opportunity.get('market_id') or opportunity.get('ticker')
-            market_data = await self._get_market_data(market_id)
-            
-            if not market_data:
-                return {
-                    'success': False,
-                    'error': 'Market not found',
-                    'market': market
-                }
-            
-            # Calculate order details
-            side = 'buy' if opportunity.get('our_probability', 0.5) > 0.5 else 'sell'
-            price = self._calculate_order_price(opportunity)
-            
-            # Execute order (placeholder - needs real Polymarket integration)
-            market_id = opportunity.get('market_id') or opportunity.get('ticker')
-            order_result = await self._place_order(
-                market_id=market_id,
-                side=side,
-                size=position_size,
-                price=price
-            )
-            
-            if order_result.get('success'):
-                return {
-                    'success': True,
-                    'trade_id': order_result.get('order_id'),
-                    'market': market,
-                    'position_size': position_size,
-                    'price': price,
-                    'side': side,
-                    'expected_value': opportunity.get('expected_value', 0),
-                    'timestamp': datetime.now().isoformat()
-                }
-            else:
-                return {
-                    'success': False,
-                    'error': order_result.get('error', 'Unknown error'),
-                    'market': market
-                }
+            return {
+                'success': True,
+                'trade_id': f'SIM-{ticker}-{int(datetime.now().timestamp())}',
+                'market': market,
+                'position_size': position_size,
+                'price': opportunity.get('market_probability', 0.5),
+                'side': 'buy',
+                'expected_value': opportunity.get('expected_value', 0),
+                'timestamp': datetime.now().isoformat(),
+                'simulated': True,
+                'warning': 'THIS IS A SIMULATED TRADE - NO REAL MONEY WAS SPENT'
+            }
                 
         except Exception as e:
             return {
@@ -103,15 +70,11 @@ class TradeExecutor:
             }
     
     async def _check_balance(self) -> float:
-        """Check USDC balance on Polygon"""
-        # TODO: Integrate with Polygon RPC
-        # For now, return starting bankroll
+        """Check balance"""
         return self.config.get('initial_bankroll', 100.0)
     
     async def _get_market_data(self, market_id: str) -> Optional[Dict]:
-        """Fetch market data from Polymarket"""
-        # TODO: Implement Polymarket API call
-        # This would use their GraphQL endpoint
+        """Fetch market data"""
         return {
             'id': market_id,
             'status': 'open',
@@ -121,35 +84,28 @@ class TradeExecutor:
     
     def _calculate_order_price(self, opportunity: Dict) -> float:
         """Calculate optimal order price"""
-        # Buy at market or slightly better
         market_prob = opportunity.get('market_probability', 0.5)
-        
-        if opportunity.get('our_probability', 0.5) > market_prob:
-            # We think it's more likely - buy
-            return min(market_prob + 0.02, 0.95)  # Don't overpay
-        else:
-            # Sell
-            return max(market_prob - 0.02, 0.05)
+        return market_prob
     
     async def _place_order(self, market_id: str, side: str, 
                           size: float, price: float) -> Dict:
-        """Place order on Polymarket"""
-        # TODO: Implement actual order placement
-        # This requires:
-        # 1. Wallet connection (MetaMask/private key)
-        # 2. Message signing
-        # 3. Order book interaction
-        # 4. Transaction submission
-        
-        # Placeholder for now
+        """Place order - SIMULATION ONLY"""
         return {
             'success': True,
-            'order_id': f'sim-{market_id}-{int(datetime.now().timestamp())}',
+            'order_id': f'SIM-{market_id}-{int(datetime.now().timestamp())}',
             'filled_size': size,
-            'filled_price': price
+            'filled_price': price,
+            'warning': 'SIMULATED - NOT A REAL TRADE'
         }
     
     async def close_position(self, trade_id: str) -> Dict:
-        """Close an open position"""
-        # TODO: Implement position closing
+        """Close a position"""
         return {'success': False, 'error': 'Not implemented'}
+    
+    def get_simulated_trades(self) -> list:
+        """Get all simulated trades"""
+        return self.executed_trades
+    
+    def clear_simulated_trades(self):
+        """Clear simulated trades history"""
+        self.executed_trades = []

@@ -257,11 +257,11 @@ class MarketScanner:
         return opportunities, details
     
     async def _analyze_kalshi_weather(self, client, market: Dict, details: Dict = None) -> Optional[Dict]:
-        """Analyze a Kalshi weather market with real weather data"""
+        """Analyze a Kalshi weather/temperature market with real weather data"""
         ticker = market.get('ticker', '')
         title = market.get('title', '')
         
-        # Parse location from title (basic parsing)
+        # Parse location from title
         cities = {
             'new york': (40.7128, -74.0060),
             'nyc': (40.7128, -74.0060),
@@ -292,19 +292,94 @@ class MarketScanner:
         if not weather_data:
             return None
         
-        # Calculate our probability from weather data
+        # Get temperature data
         daily = weather_data.get('daily', {})
-        weather_codes = daily.get('weathercode', [])
-        precipitation = daily.get('precipitation_sum', [])
+        max_temps = daily.get('temperature_2m_max', [])
+        min_temps = daily.get('temperature_2m_min', [])
         
-        if not weather_codes or len(weather_codes) < 2:
+        if not max_temps or len(max_temps) < 2:
             return None
         
-        # Tomorrow's weather (index 1)
-        tomorrow_code = weather_codes[1]
-        tomorrow_rain = precipitation[1] if len(precipitation) > 1 else 0
+        # Tomorrow's forecast (index 1)
+        tomorrow_max = max_temps[1]
+        tomorrow_min = min_temps[1] if min_temps else tomorrow_max - 10
         
-        our_probability = self._weather_code_to_rain_prob(tomorrow_code, tomorrow_rain)
+        # Determine if this is a temperature market or rain market
+        is_temp_market = 'temp' in title_lower or 'temperature' in title_lower or 'high' in ticker.lower()
+        
+        if is_temp_market:
+            # Parse temperature threshold from market title
+            # Examples: 
+            # "Will the **high temp in NYC** be >36°"
+            # "Will the **high temp in NYC** be <29°"
+            # "Will the **high temp in NYC** be 28-29°"
+            
+            our_probability = None
+            market_threshold = None
+            market_type = None  # 'above', 'below', 'range'
+            
+            # Try to parse threshold from title
+            import re
+            
+            # Check for range (e.g., "28-29°")
+            range_match = re.search(r'(\d+)[-\s]to?\s*(\d+)', title)
+            if range_match:
+                low_temp = int(range_match.group(1))
+                high_temp = int(range_match.group(2))
+                market_threshold = (low_temp, high_temp)
+                market_type = 'range'
+                # Probability that temp falls in this range
+                # Simple model: if forecast is in range, high prob
+                if low_temp <= tomorrow_max <= high_temp:
+                    our_probability = 0.85  # Forecast says it's in range
+                else:
+                    our_probability = 0.15  # Forecast says it's outside
+            else:
+                # Check for > or < threshold
+                above_match = re.search(r'>\s*(\d+)', title)
+                below_match = re.search(r'<\s*(\d+)', title)
+                
+                if above_match:
+                    market_threshold = int(above_match.group(1))
+                    market_type = 'above'
+                    # Probability temp > threshold
+                    if tomorrow_max > market_threshold:
+                        our_probability = 0.80
+                    elif tomorrow_max < market_threshold - 3:
+                        our_probability = 0.10
+                    else:
+                        our_probability = 0.50  # Uncertain
+                        
+                elif below_match:
+                    market_threshold = int(below_match.group(1))
+                    market_type = 'below'
+                    # Probability temp < threshold  
+                    if tomorrow_max < market_threshold:
+                        our_probability = 0.80
+                    elif tomorrow_max > market_threshold + 3:
+                        our_probability = 0.10
+                    else:
+                        our_probability = 0.50  # Uncertain
+            
+            if our_probability is None:
+                logger.warning(f"Could not parse temperature threshold from: {title}")
+                return None
+                
+            logger.info(f"      📊 Temp forecast: {tomorrow_max}°F (threshold: {market_threshold}, type: {market_type})")
+            
+        else:
+            # Rain market - use weather code
+            weather_codes = daily.get('weathercode', [])
+            precipitation = daily.get('precipitation_sum', [])
+            
+            if not weather_codes or len(weather_codes) < 2:
+                return None
+            
+            tomorrow_code = weather_codes[1]
+            tomorrow_rain = precipitation[1] if len(precipitation) > 1 else 0
+            our_probability = self._weather_code_to_rain_prob(tomorrow_code, tomorrow_rain)
+            market_threshold = None
+            market_type = 'rain'
         
         # Get actual market price from Kalshi
         market_probability = None
@@ -317,13 +392,10 @@ class MarketScanner:
                 yes_bids = orderbook.get('yes', [])
                 yes_asks = orderbook.get('no', [])
                 
-                # Get best bid and ask
                 best_bid = yes_bids[0].get('price', 0) / 100 if yes_bids else 0
-                # Convert NO ask to YES price
                 no_ask = yes_asks[0].get('price', 0) if yes_asks else 0
                 best_ask = (100 - no_ask) / 100 if no_ask > 0 else 0
                 
-                # Use midpoint as market probability
                 if best_bid > 0 and best_ask > 0:
                     market_probability = (best_bid + best_ask) / 2
                     price_source = f"orderbook (bid={best_bid:.2f}, ask={best_ask:.2f})"
@@ -344,10 +416,18 @@ class MarketScanner:
             market_probability = market.get('last_price', 50) / 100
             price_source = f"last_price_fallback ({market.get('last_price', 50)}¢)"
         
-        # Calculate expected value
-        expected_value = our_probability - market_probability
+        # Calculate expected value for BINARY market
+        # EV = (Win_Prob × (1 - Price)) - (Lose_Prob × Price)
+        if market_probability > 0:
+            win_prob = our_probability
+            lose_prob = 1 - win_prob
+            price = market_probability
+            
+            expected_value = (win_prob * (1 - price)) - (lose_prob * price)
+        else:
+            expected_value = 0
         
-        # Only return if it passes validation
+        # Create opportunity
         opp = {
             'market': title,
             'ticker': ticker,
@@ -357,11 +437,13 @@ class MarketScanner:
             'expected_value': expected_value,
             'odds': 1 / market_probability if market_probability > 0 else 0,
             'data_source': 'open-meteo',
-            'confidence': 0.90,
+            'confidence': 0.85 if is_temp_market else 0.90,
             'category': 'weather',
+            'subcategory': 'temperature' if is_temp_market else 'rain',
             'city': city_name,
-            'weather_code': tomorrow_code,
-            'precipitation_mm': tomorrow_rain,
+            'temp_forecast': tomorrow_max if is_temp_market else None,
+            'temp_threshold': market_threshold,
+            'market_type': market_type,
             'price_source': price_source,
         }
         
@@ -408,7 +490,7 @@ class MarketScanner:
         return opportunities
     
     async def _fetch_weather(self, lat: float, lon: float) -> Optional[Dict]:
-        """Fetch weather forecast from Open-Meteo"""
+        """Fetch weather forecast from Open-Meteo with temperature data"""
         # Create session if not exists
         if not self.session:
             self.session = aiohttp.ClientSession()
@@ -417,7 +499,7 @@ class MarketScanner:
             url = (
                 f"https://api.open-meteo.com/v1/forecast?"
                 f"latitude={lat}&longitude={lon}"
-                f"&daily=precipitation_sum,weathercode"
+                f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode"
                 f"&timezone=auto"
             )
             

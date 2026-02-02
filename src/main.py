@@ -126,7 +126,12 @@ class TradingAgent:
             logger.info(f"  → Our Prob: {first_opp.get('our_probability', 0):.1%}")
             logger.info(f"  → Market Prob: {first_opp.get('market_probability', 0):.1%}")
         
-        # 4. Filter and rank by EV
+        # 4. Filter out mutually exclusive markets
+        # Group by event/series and only take the best opportunity per group
+        opportunities = self._filter_mutually_exclusive(opportunities)
+        logger.info(f"📊 {len(opportunities)} trades after removing mutually exclusive conflicts")
+        
+        # 5. Filter and rank by EV
         valid_trades = []
         min_ev = self.config['min_ev_threshold']
         
@@ -145,7 +150,7 @@ class TradingAgent:
         
         logger.info(f"📊 {len(valid_trades)} trades passed EV filter")
         
-        # 5. Execute best trades
+        # 6. Execute best trades
         for trade in valid_trades[:3]:  # Max 3 trades per cycle
             position_size = self.risk_manager.calculate_position_size(
                 bankroll=current_bankroll,
@@ -160,20 +165,75 @@ class TradingAgent:
                 logger.info(f"  ✗ Position too small (${position_size:.2f} < $1.00)")
                 continue
             
-            logger.info(f"  🚀 Executing: {trade['market'][:40]}... | Size: ${position_size:.2f}")
+            logger.info(f"  🚀 SIMULATING TRADE: {trade['market'][:40]}... | Size: ${position_size:.2f}")
+            logger.info(f"     ⚠️  SIMULATION MODE - NO REAL MONEY BEING SPENT")
             
-            # Execute trade
+            # Execute trade (simulated)
             result = await self.trade_executor.execute_trade(trade, position_size)
             
             if result['success']:
                 await self.portfolio.record_trade(result)
                 await self.alerts.send_trade_notification(result)
-                logger.info(f"✅ TRADE EXECUTED: {trade['market'][:40]} | Size: ${position_size:.2f}")
+                if result.get('simulated'):
+                    logger.info(f"✅ SIMULATED TRADE COMPLETE: {trade['market'][:40]} | Size: ${position_size:.2f}")
+                    logger.info(f"   📝 This was a simulation - no real money was spent")
+                else:
+                    logger.info(f"✅ TRADE EXECUTED: {trade['market'][:40]} | Size: ${position_size:.2f}")
                 
                 # Update bankroll for next calculation
                 current_bankroll = await self.portfolio.get_current_bankroll()
             else:
                 logger.error(f"❌ Trade failed: {result.get('error', 'Unknown')}")
+    
+    async def stop(self):
+        """Graceful shutdown"""
+    def _filter_mutually_exclusive(self, opportunities: list) -> list:
+        """
+        Filter out mutually exclusive opportunities.
+        For example, don't bet on both:
+        - "Temp > 29°" AND "Temp < 22°" AND "Temp 28-29°"
+        
+        Group by city + date + market series, take only the best EV opportunity per group.
+        """
+        from collections import defaultdict
+        
+        # Group opportunities by (city, date, series)
+        groups = defaultdict(list)
+        
+        for opp in opportunities:
+            ticker = opp.get('ticker', '')
+            city = opp.get('city', 'unknown')
+            
+            # Extract series from ticker (e.g., KXHIGHNY-26FEB02-T36 -> KXHIGHNY)
+            series = ticker.split('-')[0] if '-' in ticker else ticker
+            
+            # Extract date from ticker if present
+            date_match = None
+            import re
+            date_match = re.search(r'-26([A-Z]{3})(\d{2})-', ticker)
+            date = date_match.group(0) if date_match else 'unknown'
+            
+            key = (city, date, series)
+            groups[key].append(opp)
+        
+        # For each group, only keep the best EV opportunity
+        filtered = []
+        for key, group_opps in groups.items():
+            if len(group_opps) == 1:
+                filtered.append(group_opps[0])
+            else:
+                # Sort by EV and take the best
+                group_opps.sort(key=lambda x: x.get('expected_value', 0), reverse=True)
+                best = group_opps[0]
+                filtered.append(best)
+                
+                city, date, series = key
+                logger.info(f"  ⚠️  Mutually exclusive group ({city} {date}): {len(group_opps)} markets")
+                logger.info(f"      Selected best: {best.get('ticker')} (EV: {best.get('expected_value', 0):.1%})")
+                for opp in group_opps[1:]:
+                    logger.info(f"      Rejected: {opp.get('ticker')} (EV: {opp.get('expected_value', 0):.1%})")
+        
+        return filtered
     
     async def stop(self):
         """Graceful shutdown"""
