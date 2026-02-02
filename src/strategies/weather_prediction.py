@@ -70,20 +70,23 @@ class WeatherPredictionStrategy(BaseStrategy):
                 else:
                     # REAL: Execute via Kalshi API
                     try:
-                        self.client.create_order(
-                            ticker=ticker,
-                            side='buy',
-                            contracts=contracts,
-                            price=market_price
+                        result = self.client.place_order(
+                            market_id=ticker,
+                            side='yes',
+                            price=market_price,
+                            count=contracts
                         )
-                        self.record_position(
-                            ticker=ticker,
-                            side='YES',
-                            contracts=contracts,
-                            entry_price=market_price,
-                            market_title=opp.get('market', '')
-                        )
-                        logger.info(f"    [REAL] ✓ Executed: {ticker} (EV: {opp.get('expected_value'):.1%})")
+                        if result.get('order_id'):
+                            self.record_position(
+                                ticker=ticker,
+                                side='YES',
+                                contracts=contracts,
+                                entry_price=market_price,
+                                market_title=opp.get('market', '')
+                            )
+                            logger.info(f"    [REAL] ✓ Executed: {ticker} (EV: {opp.get('expected_value'):.1%}) Order: {result['order_id']}")
+                        else:
+                            logger.error(f"    [REAL] ✗ Order failed: {result}")
                     except Exception as e:
                         logger.error(f"    [REAL] ✗ Failed to execute {ticker}: {e}")
                         continue

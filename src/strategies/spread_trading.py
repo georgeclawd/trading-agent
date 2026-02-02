@@ -135,20 +135,23 @@ class SpreadTradingStrategy(BaseStrategy):
             else:
                 # REAL: Place limit order via Kalshi API
                 try:
-                    self.client.create_order(
-                        ticker=ticker,
-                        side='buy',
-                        contracts=min(self.max_position, 5),
-                        price=entry_price
+                    result = self.client.place_order(
+                        market_id=ticker,
+                        side='yes',
+                        price=entry_price,
+                        count=min(self.max_position, 5)
                     )
-                    self.record_position(
-                        ticker=ticker,
-                        side='YES',
-                        contracts=min(self.max_position, 5),
-                        entry_price=entry_price,
-                        market_title=opp['market']
-                    )
-                    logger.info(f"    [REAL] ✓ Placed limit: {ticker} at {opp['entry_price']:.1%}")
+                    if result.get('order_id'):
+                        self.record_position(
+                            ticker=ticker,
+                            side='YES',
+                            contracts=min(self.max_position, 5),
+                            entry_price=entry_price,
+                            market_title=opp['market']
+                        )
+                        logger.info(f"    [REAL] ✓ Placed limit: {ticker} at {opp['entry_price']:.1%} Order: {result['order_id']}")
+                    else:
+                        logger.error(f"    [REAL] ✗ Order failed: {result}")
                 except Exception as e:
                     logger.error(f"    [REAL] ✗ Failed to place limit {ticker}: {e}")
                     continue

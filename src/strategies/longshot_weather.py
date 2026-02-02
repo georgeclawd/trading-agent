@@ -459,21 +459,24 @@ class LongshotWeatherStrategy(BaseStrategy):
             else:
                 # REAL: Execute via Kalshi API
                 try:
-                    self.client.create_order(
-                        ticker=ticker,
-                        side='buy',
-                        contracts=min(self.max_position, 5),
-                        price=market_price_cents
+                    result = self.client.place_order(
+                        market_id=ticker,
+                        side='yes',
+                        price=market_price_cents,
+                        count=min(self.max_position, 5)
                     )
-                    self.record_position(
-                        ticker=ticker,
-                        side='YES',
-                        contracts=min(self.max_position, 5),
-                        entry_price=market_price_cents,
-                        market_title=opp['market']
-                    )
-                    logger.info(f"    [REAL] ✓ Executed: {ticker[:30]}... "
-                               f"at {opp['market_price']:.1%}, edge={opp['expected_value']:.1%}")
+                    if result.get('order_id'):
+                        self.record_position(
+                            ticker=ticker,
+                            side='YES',
+                            contracts=min(self.max_position, 5),
+                            entry_price=market_price_cents,
+                            market_title=opp['market']
+                        )
+                        logger.info(f"    [REAL] ✓ Executed: {ticker[:30]}... "
+                                   f"at {opp['market_price']:.1%}, edge={opp['expected_value']:.1%} Order: {result['order_id']}")
+                    else:
+                        logger.error(f"    [REAL] ✗ Order failed: {result}")
                 except Exception as e:
                     logger.error(f"    [REAL] ✗ Failed to execute {ticker}: {e}")
                     continue
