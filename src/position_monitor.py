@@ -70,11 +70,11 @@ class PositionMonitor:
             
             # Check if position still exists on Kalshi
             if ticker not in kalshi_tickers:
-                # Position was settled/closed on Kalshi
-                # Try to get settlement info from market data
+                # Position was closed on Kalshi - check settlement status
                 market_data = await self._get_market_settlement(ticker)
                 
                 if market_data and market_data.get('is_settled'):
+                    # Full settlement data available
                     settlement_price = market_data.get('settlement_price', 0)
                     
                     # Calculate actual P&L
@@ -101,8 +101,23 @@ class PositionMonitor:
                         'reason': 'market_settled'
                     })
                     
-                    logger.info(f"📊 Position settled: {ticker} {local_pos.side} x{local_pos.contracts} "
-                               f"@ {settlement_price}c | P&L: ${pnl_dollars:+.2f}")
+                    if pnl_dollars >= 0:
+                        logger.info(f"💰 Position settled WIN: {ticker} {local_pos.side} x{local_pos.contracts} "
+                                   f"@ {settlement_price}c | P&L: ${pnl_dollars:+.2f}")
+                    else:
+                        logger.warning(f"💸 Position settled LOSS: {ticker} {local_pos.side} x{local_pos.contracts} "
+                                      f"@ {settlement_price}c | P&L: ${pnl_dollars:+.2f}")
+                
+                elif market_data and market_data.get('is_finalized'):
+                    # Market finalized but settlement pending
+                    logger.info(f"⏳ Position finalized (settlement pending): {ticker} - "
+                               f"waiting for result publication")
+                    # Don't close position yet - keep monitoring
+                
+                else:
+                    # Position gone but can't determine status - assume settled at entry
+                    logger.warning(f"⚠️ Position disappeared from Kalshi: {ticker} - "
+                                  f"manual review recommended")
         
         return closed_positions
     
@@ -155,10 +170,20 @@ class PositionMonitor:
                 if status == 'settled':
                     # Get settlement price - YES side pays 100 if YES won, 0 if NO won
                     yes_result = market.get('yes_result', 0)  # 0 or 100
+                    settlement_price = 100 if yes_result else 0
                     return {
                         'is_settled': True,
-                        'settlement_price': yes_result,  # 0 or 100 cents
-                        'result': 'YES' if yes_result == 100 else 'NO'
+                        'settlement_price': settlement_price,  # 0 or 100 cents
+                        'result': 'YES' if yes_result else 'NO'
+                    }
+                elif status == 'finalized':
+                    # Market is finalized but not yet settled
+                    # Position was closed but result pending
+                    return {
+                        'is_settled': False,
+                        'is_finalized': True,
+                        'status': 'finalized',
+                        'message': 'Market closed, settlement pending'
                     }
                 else:
                     return {'is_settled': False}
