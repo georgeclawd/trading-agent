@@ -1,0 +1,2 @@
+from .weather_prediction import WeatherPredictionStrategy
+from .spread_trading import SpreadTradingStrategy
