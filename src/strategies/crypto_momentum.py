@@ -242,6 +242,10 @@ class CryptoMomentumStrategy(BaseStrategy):
                             price = extractor(data)
                             prices.append(price)
                             logger.info(f"CryptoMomentum: {name} price = ${price:,.2f}")
+                        elif resp.status == 429:
+                            logger.warning(f"CryptoMomentum: {name} RATE LIMITED (429)")
+                        else:
+                            logger.debug(f"CryptoMomentum: {name} HTTP {resp.status}")
             except asyncio.TimeoutError:
                 logger.warning(f"CryptoMomentum: {name} TIMEOUT")
             except Exception as e:
