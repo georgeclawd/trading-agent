@@ -673,7 +673,7 @@ class CryptoMomentumStrategy(BaseStrategy):
                 executed_count += 1
             else:
                 # REAL: Execute via Kalshi API
-                logger.info(f"CryptoMomentum: [REAL] EXECUTING - {ticker} {opp['side']} x{contracts} @ {limit_price}c (edge={edge:.2f}%})")
+                logger.info(f"CryptoMomentum: [REAL] EXECUTING - {ticker} {opp['side']} x{contracts} @ {limit_price}c (edge={edge:.2f})")
                 
                 try:
                     self.client.create_order(
