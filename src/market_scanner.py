@@ -539,7 +539,7 @@ class MarketScanner:
         
         # Fetch fresh weather data for each city
         for city in cities:
-            weather_data = await self._fetch_weather(city['lat'], city['lon'])
+            weather_data = await self._fetch_weather(city['name'], city['lat'], city['lon'])
             
             if weather_data:
                 # Log the fresh data for debugging
