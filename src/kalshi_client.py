@@ -198,7 +198,20 @@ class KalshiClient:
             data["expiration_ts"] = expiration_ts
         
         try:
-            response = self._request("POST", "/orders", data)
+            # Try different endpoints - Kalshi API changed recently
+            endpoints_to_try = ["/portfolio/orders", "/orders"]
+            response = None
+            
+            for endpoint in endpoints_to_try:
+                try:
+                    response = self._request("POST", endpoint, data)
+                    if response.status_code != 404:
+                        break  # Found working endpoint
+                except:
+                    continue
+            
+            if response is None:
+                return {"success": False, "error": "All order endpoints failed"}
             
             # Log raw response for debugging
             print(f"[Kalshi] Response status: {response.status_code}")
