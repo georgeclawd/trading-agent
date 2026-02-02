@@ -145,10 +145,28 @@ class MarketScanner:
             markets = client.get_markets(limit=1000, status='open')
             logger.info(f"   📊 Retrieved {len(markets)} active markets")
             
-            # Also check for event-based markets (like Grammys)
-            logger.info("   📅 Checking event-based markets...")
+            # Also check for series-based markets (climate, weather)
+            logger.info("   📅 Checking series-based markets (climate/weather)...")
             try:
-                # Check specific events we know about
+                # Check climate/weather series
+                series_tickers = ['KXHIGHNY', 'KXHIGHLA', 'KXHIGHCHI', 'KXHIGHLON']
+                for series_ticker in series_tickers:
+                    series_response = client._request("GET", f"/series/{series_ticker}")
+                    if series_response and series_response.status_code == 200:
+                        # Get markets in this series
+                        series_markets_response = client._request("GET", f"/markets?series_ticker={series_ticker}&limit=50")
+                        if series_markets_response and series_markets_response.status_code == 200:
+                            series_data = series_markets_response.json()
+                            series_markets = series_data.get('markets', [])
+                            if series_markets:
+                                logger.info(f"      ✅ Found series {series_ticker}: {len(series_markets)} markets")
+                                markets.extend(series_markets)
+                                
+                                # Log first few for visibility
+                                for m in series_markets[:3]:
+                                    logger.info(f"         • {m.get('ticker')}: {m.get('title', 'N/A')[:50]}...")
+                
+                # Also check specific events (like Grammys)
                 event_tickers = ['KXGRAMAOTY-68', 'KXMVESPORTSMULTIGAMEEXTENDED']
                 for event_ticker in event_tickers:
                     event_response = client._request("GET", f"/events/{event_ticker}")
@@ -156,10 +174,9 @@ class MarketScanner:
                         event_data = event_response.json()
                         event_markets = event_data.get('markets', [])
                         logger.info(f"      ✅ Found event {event_ticker}: {len(event_markets)} markets")
-                        # Add these markets to our list
                         markets.extend(event_markets)
             except Exception as e:
-                logger.warning(f"   Event check warning: {e}")
+                logger.warning(f"   Series/event check warning: {e}")
             
             # Filter for weather markets
             weather_keywords = ['rain', 'temperature', 'snow', 'weather']
@@ -189,6 +206,11 @@ class MarketScanner:
                 if any(word in title for word in weather_keywords):
                     # Check if it's for one of our monitored cities
                     if any(city in title for city in cities):
+                        weather_markets.append(market)
+                
+                # Check for temperature markets (series like KXHIGHNY)
+                if 'high temp' in title or 'low temp' in title or 'highest temperature' in title or 'lowest temperature' in title:
+                    if any(city in title for city in ['new york', 'nyc', 'los angeles', 'la', 'chicago', 'london']):
                         weather_markets.append(market)
             
             details['weather_markets_found'] = len(weather_markets)
