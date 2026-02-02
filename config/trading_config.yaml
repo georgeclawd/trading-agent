@@ -10,7 +10,7 @@ daily_loss_limit: 0.20       # Stop trading after 20% daily loss
 kelly_fraction: 0.25         # Conservative Kelly criterion
 min_ev_threshold: 0.05       # Minimum 5% expected value
 
-# Scanning
+# Scanning (default - can override per strategy)
 scan_interval: 1800          # 30 minutes between market scans
 
 # Markets to trade
@@ -50,15 +50,23 @@ strategies:
   weather_prediction:
     enabled: true
     allocation: 0.25         # 25% of capital
+    dry_run: true            # Simulated trading
+    scan_interval: 1800      # 30 minutes
   spread_trading:
     enabled: true
     allocation: 0.25         # 25% of capital
+    dry_run: true            # Simulated trading
+    scan_interval: 1800      # 30 minutes
   crypto_momentum:
     enabled: true
     allocation: 0.25         # 25% of capital
+    dry_run: false           # REAL MONEY
+    scan_interval: 300       # 5 minutes (15-min markets need faster)
   longshot_weather:
     enabled: true
     allocation: 0.25         # 25% of capital - $64K bot algorithm
+    dry_run: true            # Simulated trading
+    scan_interval: 1800      # 30 minutes
 
 # Logging
 log_level: INFO

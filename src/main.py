@@ -6,6 +6,7 @@ Runs multiple strategies in parallel, optimizes for best performance
 import asyncio
 import json
 import logging
+import pytz
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -22,6 +23,19 @@ from trade_executor import TradeExecutor
 from portfolio_tracker import PortfolioTracker
 from alert_system import AlertSystem
 from whale_watcher import WhaleWatcher
+
+# Timezone setup
+EST = pytz.timezone('America/New_York')
+
+def now_est() -> datetime:
+    """Get current time in EST"""
+    return datetime.now(EST)
+
+def format_est(dt: datetime = None) -> str:
+    """Format datetime as EST string"""
+    if dt is None:
+        dt = now_est()
+    return dt.strftime('%Y-%m-%d %H:%M:%S EST')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -211,13 +225,13 @@ class TradingAgent:
                     num_candles = len(candles)
                     if num_candles < 30:
                         # Log every minute until we have 30 candles
-                        logger.info(f"📊 BTC 1m Candles: {num_candles}/30 (need {30 - num_candles} more for indicators)")
+                        logger.info(f"📊 BTC 1m Candles: {num_candles}/30 (need {30 - num_candles} more) - {format_est()}")
                     else:
                         # Show indicator preview when ready
                         if num_candles == 30:
-                            logger.info("✅ BTC 1m Candles complete! Indicators ready")
+                            logger.info(f"✅ BTC 1m Candles complete! Indicators ready - {format_est()}")
                 else:
-                    logger.warning("Price fetcher: No candles returned")
+                    logger.warning(f"Price fetcher: No candles returned - {format_est()}")
                 
                 # Wait 60 seconds
                 await asyncio.sleep(60)
@@ -231,9 +245,10 @@ class TradingAgent:
     
     async def run(self):
         """Main trading loop - runs 24/7 with multiple strategies"""
-        logger.info("🚀 Trading Agent v2 starting...")
+        logger.info(f"🚀 Trading Agent v2 starting... - {format_est()}")
         logger.info(f"💰 Initial bankroll: ${self.config['initial_bankroll']}")
         logger.info(f"🎲 SIMULATION MODE: {'ENABLED' if self.config.get('simulation_mode', True) else 'DISABLED'}")
+        logger.info(f"🕐 All times shown in EST (Eastern)")
         
         # Initialize strategies
         await self._init_strategies()
@@ -247,29 +262,69 @@ class TradingAgent:
         # Start background price fetcher
         price_fetcher_task = asyncio.create_task(self._price_fetcher_loop())
         
+        # Start independent strategy loops with different intervals
+        strategy_tasks = []
+        for strategy in self.strategy_manager.strategies:
+            task = asyncio.create_task(self._strategy_loop(strategy))
+            strategy_tasks.append(task)
+        
+        # Keep main loop alive
         while self.running:
             try:
-                self.cycle_count += 1
-                logger.info(f"\n{'='*60}")
-                logger.info(f"🔄 TRADING CYCLE #{self.cycle_count}")
-                logger.info(f"{'='*60}")
+                await asyncio.sleep(60)  # Just keep alive, strategies run independently
                 
-                await self._trading_cycle()
-                
-                # Optimize allocations every 10 cycles
-                if self.cycle_count % 10 == 0:
+                # Optimize allocations every hour
+                if self.cycle_count > 0 and self.cycle_count % 12 == 0:
                     logger.info("🎯 Optimizing strategy allocations...")
                     self.strategy_manager.optimize_allocations()
-                
-                await asyncio.sleep(self.config['scan_interval'])
-                
+                    
             except Exception as e:
-                logger.error(f"Error in trading cycle: {e}", exc_info=True)
-                await self.alerts.send_alert("❌ Trading Error", str(e))
+                logger.error(f"Error in main loop: {e}", exc_info=True)
                 await asyncio.sleep(60)
         
         # Clean up
         price_fetcher_task.cancel()
+        for task in strategy_tasks:
+            task.cancel()
+    
+    async def _strategy_loop(self, strategy):
+        """Run a single strategy in its own loop with its own interval"""
+        strategy_config = self.config.get('strategies', {}).get(strategy.name.lower(), {})
+        interval = strategy_config.get('scan_interval', self.config['scan_interval'])
+        
+        # Convert interval to minutes for display
+        interval_min = interval // 60
+        
+        logger.info(f"🔄 Starting {strategy.name} loop (every {interval_min} min) - {format_est()}")
+        
+        while self.running:
+            try:
+                import time
+                start_time = time.time()
+                
+                # Run strategy
+                opportunities = await strategy.scan()
+                trades_executed = await strategy.execute(opportunities)
+                
+                runtime = time.time() - start_time
+                
+                if opportunities or trades_executed:
+                    logger.info(f"📊 {strategy.name}: {len(opportunities)} opportunities, {trades_executed} trades ({runtime:.1f}s) - {format_est()}")
+                else:
+                    logger.debug(f"📊 {strategy.name}: No opportunities ({runtime:.1f}s) - {format_est()}")
+                
+                self.cycle_count += 1
+                
+                # Calculate and log next run time
+                next_run = now_est() + timedelta(seconds=interval)
+                logger.info(f"⏰ {strategy.name}: Next run at {next_run.strftime('%H:%M:%S EST')}")
+                
+                # Sleep until next cycle
+                await asyncio.sleep(interval)
+                
+            except Exception as e:
+                logger.error(f"❌ {strategy.name} error: {e} - {format_est()}")
+                await asyncio.sleep(interval)
     
     async def _trading_cycle(self):
         """Execute all strategies"""
