@@ -131,12 +131,15 @@ class PositionManager:
         positions_dict = self.simulated_positions if simulated else self.positions
         
         daily_positions = []
+        unique_tickers = set()
+        
         for pos in positions_dict.values():
             try:
                 pos_date = datetime.fromisoformat(pos.entry_time).date()
                 if pos_date == date:
                     if strategy is None or pos.strategy == strategy:
                         daily_positions.append(pos)
+                        unique_tickers.add(pos.ticker)
             except:
                 continue
         
@@ -147,8 +150,10 @@ class PositionManager:
             'date': date.isoformat(),
             'strategy': strategy or 'all',
             'total_trades': len(daily_positions),
+            'unique_markets': len(unique_tickers),
             'closed_trades': len(closed),
-            'total_pnl': total_pnl
+            'total_pnl': total_pnl,
+            'tickers': list(unique_tickers)[:10]  # First 10 tickers
         }
     
     def _save_positions(self):
@@ -357,3 +362,23 @@ class PositionManager:
             logger.info(f"🥈 BEST SIMULATED: {best_sim[0]} with ${best_sim[1]['total_pnl']:+.2f}")
         
         logger.info("=" * 70)
+
+    def print_daily_summary(self, simulated: bool = True):
+        """Print a nice summary of today's trading activity"""
+        perf = self.get_daily_performance(simulated=simulated)
+        
+        logger.info("=" * 60)
+        logger.info(f"📊 DAILY SUMMARY - {perf['date']}")
+        logger.info("=" * 60)
+        logger.info(f"Strategy: {perf['strategy']}")
+        logger.info(f"Total Trades: {perf['total_trades']}")
+        logger.info(f"Unique Markets: {perf['unique_markets']}")
+        logger.info(f"Closed Trades: {perf['closed_trades']}")
+        logger.info(f"Total P&L: ${perf['total_pnl']:+.2f}")
+        
+        if perf['tickers']:
+            logger.info(f"Markets: {', '.join(perf['tickers'][:5])}")
+            if len(perf['tickers']) > 5:
+                logger.info(f"        ... and {len(perf['tickers']) - 5} more")
+        
+        logger.info("=" * 60)
