@@ -7,6 +7,9 @@ from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
+import logging
+
+logger = logging.getLogger('StrategyManager')
 
 
 @dataclass
@@ -87,7 +90,7 @@ class StrategyManager:
         self.strategies.append(strategy)
         self.performance_history[strategy.name] = []
         self.allocations[strategy.name] = allocation
-        print(f"✅ Registered strategy: {strategy.name} (allocation: {allocation:.0%})")
+        logger.info(f"✅ Registered strategy: {strategy.name} (allocation: {allocation:.0%})")
     
     async def run_all(self) -> Dict[str, StrategyResult]:
         """
@@ -101,8 +104,8 @@ class StrategyManager:
         
         results = {}
         
-        print(f"\n🚀 Running {len(self.strategies)} strategies...")
-        print("="*60)
+        logger.info(f"🚀 Running {len(self.strategies)} strategies...")
+        logger.info("="*60)
         
         for strategy in self.strategies:
             start_time = time.time()
@@ -146,20 +149,20 @@ class StrategyManager:
     
     def _print_summary(self, results: Dict[str, StrategyResult]):
         """Print summary of all strategy results"""
-        print("\n📊 STRATEGY PERFORMANCE SUMMARY")
-        print("="*60)
+        logger.info("📊 STRATEGY PERFORMANCE SUMMARY")
+        logger.info("="*60)
         
         for name, result in results.items():
-            print(f"\n{name}:")
-            print(f"  Opportunities: {result.opportunities_found}")
-            print(f"  Trades: {result.trades_executed}")
-            print(f"  P&L: ${result.profit_loss:+.2f}")
-            print(f"  Win Rate: {result.win_rate:.1%}")
-            print(f"  Runtime: {result.runtime_seconds:.1f}s")
+            logger.info(f"{name}:")
+            logger.info(f"  Opportunities: {result.opportunities_found}")
+            logger.info(f"  Trades: {result.trades_executed}")
+            logger.info(f"  P&L: ${result.profit_loss:+.2f}")
+            logger.info(f"  Win Rate: {result.win_rate:.1%}")
+            logger.info(f"  Runtime: {result.runtime_seconds:.1f}s")
             if result.errors:
-                print(f"  ⚠️  Recent errors: {len(result.errors)}")
+                logger.info(f"  ⚠️  Recent errors: {len(result.errors)}")
         
-        print("\n" + "="*60)
+        logger.info("="*60)
     
     def optimize_allocations(self):
         """
@@ -203,9 +206,9 @@ class StrategyManager:
         for name in self.allocations:
             self.allocations[name] /= total
         
-        print("\n🎯 OPTIMIZED ALLOCATIONS:")
+        logger.info("🎯 OPTIMIZED ALLOCATIONS:")
         for name, alloc in self.allocations.items():
-            print(f"  {name}: {alloc:.1%}")
+            logger.info(f"  {name}: {alloc:.1%}")
     
     def get_best_strategy(self) -> Optional[str]:
         """Get the name of the best performing strategy"""
