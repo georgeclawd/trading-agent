@@ -41,7 +41,7 @@ class CryptoMomentumStrategy(BaseStrategy):
         
         # Initialize position monitor for hedge tracking
         if position_manager:
-            self.position_monitor = PositionMonitor(position_manager)
+            self.position_monitor = PositionMonitor(position_manager, kalshi_client=client)
         else:
             self.position_monitor = None
         
@@ -539,25 +539,85 @@ class CryptoMomentumStrategy(BaseStrategy):
         return now.minute % 15
     
     async def _monitor_positions(self):
-        """Monitor existing positions for hedge/exit opportunities"""
+        """Monitor existing positions for hedge/exit opportunities and settlement"""
         try:
             async def get_market_data(ticker):
-                """Fetch current market data for a ticker"""
+                """Fetch current market data for a ticker - includes settlement detection"""
                 try:
+                    # First check if market is settled via Kalshi API
+                    import requests
+                    import time
+                    import base64
+                    from cryptography.hazmat.primitives import hashes, padding as crypto_padding
+                    
+                    api_key_id = self.client.api_key_id
+                    api_key = self.client.api_key
+                    
+                    # Create signature for market lookup
+                    def create_sig(ts, method, path):
+                        msg = f"{ts}{method}{path}"
+                        sig = self.client._private_key.sign(
+                            msg.encode(),
+                            crypto_padding.PSS(mgf=crypto_padding.MGF1(hashes.SHA256()), salt_length=crypto_padding.PSS.DIGEST_LENGTH),
+                            hashes.SHA256()
+                        )
+                        return base64.b64encode(sig).decode()
+                    
+                    ts = str(int(time.time() * 1000))
+                    sig = create_sig(ts, "GET", f"/trade-api/v2/markets/{ticker}")
+                    
+                    headers = {
+                        "KALSHI-ACCESS-KEY": api_key_id,
+                        "KALSHI-ACCESS-SIGNATURE": sig,
+                        "KALSHI-ACCESS-TIMESTAMP": ts
+                    }
+                    
+                    resp = requests.get(
+                        f"https://api.elections.kalshi.com/trade-api/v2/markets/{ticker}",
+                        headers=headers,
+                        timeout=10
+                    )
+                    
+                    if resp.status_code == 200:
+                        market = resp.json().get('market', {})
+                        status = market.get('status', 'open')
+                        
+                        if status == 'settled':
+                            # Market settled - return settlement price
+                            yes_result = market.get('yes_result', 0)  # 0 or 100
+                            return {
+                                'is_settled': True,
+                                'settlement_price': yes_result,  # 0 or 100 cents
+                                'price': yes_result,
+                                'edge': 0
+                            }
+                    
+                    # Market still open - get orderbook
                     orderbook = self.client.get_orderbook(ticker)
                     if orderbook and 'orderbook' in orderbook:
                         yes_bids = orderbook['orderbook'].get('yes', [])
                         if yes_bids and len(yes_bids) > 0:
                             # Get best bid price
                             price = yes_bids[0][0] / 100  # Convert cents to decimal
-                            return {'price': price, 'edge': 0}  # Edge calc would need fair prob
-                except:
+                            return {'price': price, 'edge': 0, 'is_settled': False}
+                            
+                except Exception as e:
+                    logger.debug(f"get_market_data error for {ticker}: {e}")
                     pass
                 return None
             
             alerts = await self.position_monitor.check_all_positions(self, get_market_data)
             
             if alerts:
+                # Log settled positions
+                settled = [a for a in alerts if a.is_settled]
+                for s in settled:
+                    if s.pnl_dollars >= 0:
+                        logger.info(f"💰 SETTLED WIN: {s.ticker} {s.side} | P&L: ${s.pnl_dollars:+.2f}")
+                    else:
+                        logger.warning(f"💸 SETTLED LOSS: {s.ticker} {s.side} | P&L: ${s.pnl_dollars:+.2f}")
+                
+                # Generate hedge recommendations for non-settled
                 hedges = self.position_monitor.generate_hedge_recommendations(alerts)
                 for hedge in hedges:
                     logger.warning(f"🔄 HEDGE RECOMMENDED: {hedge['ticker']} - "
