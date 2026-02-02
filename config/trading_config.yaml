@@ -5,7 +5,7 @@ initial_bankroll: 100.0
 currency: USDC
 
 # Risk Management
-max_position_size: 0.05      # Max 5% of bankroll per trade
+max_position_size: 5.0       # Max $5 per trade (absolute dollars)
 daily_loss_limit: 0.20       # Stop trading after 20% daily loss
 kelly_fraction: 0.25         # Conservative Kelly criterion
 min_ev_threshold: 0.05       # Minimum 5% expected value
