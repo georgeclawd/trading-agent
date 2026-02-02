@@ -8,6 +8,7 @@ import aiohttp
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 import logging
+from weather_cache import WeatherCache
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ class MarketScanner:
     def __init__(self, config: Dict):
         self.config = config
         self.session: Optional[aiohttp.ClientSession] = None
+        self.weather_cache = WeatherCache()
         
         # Data sources for different markets
         self.data_sources = {
@@ -219,15 +221,41 @@ class MarketScanner:
                     if any(city in title for city in ['new york', 'nyc', 'los angeles', 'la', 'chicago', 'london']):
                         weather_markets.append(market)
             
-            details['weather_markets_found'] = len(weather_markets)
-            logger.info(f"   🌦️  Found {len(weather_markets)} weather markets for monitored cities")
+            # Filter markets: only analyze those with sufficient volume and within next 5 days
+            filtered_markets = []
+            for m in weather_markets:
+                # Check volume
+                volume = m.get('volume', 0)
+                if volume < 500:  # Skip low volume markets
+                    continue
+                
+                # Check date - only analyze next 5 days
+                ticker = m.get('ticker', '')
+                import re
+                date_match = re.search(r'-26([A-Z]{3})(\d{2})-', ticker)
+                if date_match:
+                    month_str = date_match.group(1)
+                    day_str = date_match.group(2)
+                    months = {'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
+                             'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12}
+                    month_num = months.get(month_str, 1)
+                    market_date = datetime(2026, month_num, int(day_str))
+                    days_until = (market_date - datetime.now()).days
+                    
+                    if days_until > 5 or days_until < 0:  # Skip if >5 days away or in past
+                        continue
+                
+                filtered_markets.append(m)
             
-            # Analyze each weather market
-            for i, market in enumerate(weather_markets, 1):
+            details['weather_markets_found'] = len(filtered_markets)
+            logger.info(f"   🌦️  Found {len(weather_markets)} weather markets, analyzing {len(filtered_markets)} (filtered by volume/date)")
+            
+            # Analyze each filtered weather market
+            for i, market in enumerate(filtered_markets, 1):
                 ticker = market.get('ticker', '')
                 title = market.get('title', '')
                 
-                logger.info(f"   [{i}/{len(weather_markets)}] Analyzing: {ticker}")
+                logger.info(f"   [{i}/{len(filtered_markets)}] Analyzing: {ticker}")
                 
                 opp = await self._analyze_kalshi_weather(client, market, details)
                 
@@ -292,23 +320,8 @@ class MarketScanner:
         if not city_coords:
             return None
         
-        # Use cached weather data if available (avoid repeated API calls for same city)
-        cache_key = f"{city_coords[0]},{city_coords[1]}"
-        if hasattr(self, '_weather_cache') and cache_key in self._weather_cache:
-            weather_data = self._weather_cache[cache_key]
-            if weather_data is not None:
-                logger.debug(f"Using cached weather data for {city_name}")
-            else:
-                # Cached value was None (failed fetch), try again
-                weather_data = await self._fetch_weather(city_coords[0], city_coords[1])
-                self._weather_cache[cache_key] = weather_data
-        else:
-            # Fetch real weather data
-            weather_data = await self._fetch_weather(city_coords[0], city_coords[1])
-            # Cache it (even if None, to avoid hammering API on failures)
-            if not hasattr(self, '_weather_cache'):
-                self._weather_cache = {}
-            self._weather_cache[cache_key] = weather_data
+        # Fetch weather data (now uses SQLite cache)
+        weather_data = await self._fetch_weather(city_name, city_coords[0], city_coords[1])
         
         if not weather_data:
             return None
@@ -548,14 +561,20 @@ class MarketScanner:
         
         return opportunities
     
-    async def _fetch_weather(self, lat: float, lon: float) -> Optional[Dict]:
-        """Fetch weather forecast from Open-Meteo with temperature data in Fahrenheit"""
+    async def _fetch_weather(self, city: str, lat: float, lon: float) -> Optional[Dict]:
+        """Fetch weather forecast from Open-Meteo with caching"""
+        # Check cache first
+        cached = self.weather_cache.get(city, lat, lon, max_age_hours=6)
+        if cached:
+            logger.debug(f"Using cached weather for {city}")
+            return cached
+        
         # Create session if not exists
         if not self.session:
             self.session = aiohttp.ClientSession()
         
-        # Rate limiting: wait 1 second between API calls to avoid 429 errors
-        await asyncio.sleep(1.0)
+        # Rate limiting: wait 2 seconds between API calls
+        await asyncio.sleep(2.0)
         
         try:
             url = (
@@ -564,19 +583,24 @@ class MarketScanner:
                 f"&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode"
                 f"&timezone=auto"
                 f"&temperature_unit=fahrenheit"
-                f"&forecast_days=14"
+                f"&forecast_days=7"  # Reduced from 14 to 7 days
             )
             
             async with self.session.get(url, timeout=10) as response:
                 if response.status == 200:
-                    return await response.json()
+                    data = await response.json()
+                    # Cache the result
+                    self.weather_cache.set(city, lat, lon, data, ttl_hours=6)
+                    return data
                 elif response.status == 429:
-                    logger.warning(f"Weather API rate limited (429), waiting 5 seconds...")
-                    await asyncio.sleep(5)
+                    logger.warning(f"Weather API rate limited (429), waiting 10 seconds...")
+                    await asyncio.sleep(10)
                     # Retry once
                     async with self.session.get(url, timeout=10) as retry_response:
                         if retry_response.status == 200:
-                            return await retry_response.json()
+                            data = await retry_response.json()
+                            self.weather_cache.set(city, lat, lon, data, ttl_hours=6)
+                            return data
                         else:
                             logger.error(f"Weather API retry failed: {retry_response.status}")
                 else:
