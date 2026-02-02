@@ -53,7 +53,8 @@ class TradeExecutor:
                 }
             
             # Get market details from Polymarket
-            market_data = await self._get_market_data(opportunity.get('market_id'))
+            market_id = opportunity.get('market_id') or opportunity.get('ticker')
+            market_data = await self._get_market_data(market_id)
             
             if not market_data:
                 return {
@@ -67,8 +68,9 @@ class TradeExecutor:
             price = self._calculate_order_price(opportunity)
             
             # Execute order (placeholder - needs real Polymarket integration)
+            market_id = opportunity.get('market_id') or opportunity.get('ticker')
             order_result = await self._place_order(
-                market_id=opportunity['market_id'],
+                market_id=market_id,
                 side=side,
                 size=position_size,
                 price=price
