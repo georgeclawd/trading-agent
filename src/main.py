@@ -210,8 +210,8 @@ class TradingAgent:
                 if candles:
                     num_candles = len(candles)
                     if num_candles < 30:
-                        if num_candles % 5 == 0 or num_candles <= 5:
-                            logger.info(f"📊 BTC 1m Candles: {num_candles}/30")
+                        # Log every minute until we have 30 candles
+                        logger.info(f"📊 BTC 1m Candles: {num_candles}/30 (need {30 - num_candles} more for indicators)")
                     else:
                         # Show indicator preview when ready
                         if num_candles == 30:
