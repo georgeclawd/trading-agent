@@ -7,6 +7,9 @@ import asyncio
 import aiohttp
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class MarketScanner:
@@ -47,29 +50,51 @@ class MarketScanner:
         """Scan all markets for +EV opportunities"""
         opportunities = []
         
+        logger.info("🔍 STARTING MARKET SCAN")
+        logger.info("="*60)
+        
         # Real weather-based opportunities
+        logger.info("📡 Fetching fresh weather data for major cities...")
         weather_opps = await self._analyze_weather_markets()
         opportunities.extend(weather_opps)
         
         # Kalshi markets
-        kalshi_opps = await self._scan_kalshi()
+        logger.info("🏦 Scanning Kalshi for matching weather markets...")
+        kalshi_opps, kalshi_details = await self._scan_kalshi()
         opportunities.extend(kalshi_opps)
+        
+        # Log summary
+        logger.info("="*60)
+        logger.info(f"📊 SCAN SUMMARY:")
+        logger.info(f"   Cities checked: {kalshi_details.get('cities_checked', 0)}")
+        logger.info(f"   Weather markets found: {kalshi_details.get('weather_markets_found', 0)}")
+        logger.info(f"   Markets with data: {kalshi_details.get('markets_with_data', 0)}")
+        logger.info(f"   Opportunities passing EV filter: {len(opportunities)}")
+        
+        if opportunities:
+            logger.info(f"   Best EV: {opportunities[0].get('expected_value', 0):.2%}")
+        else:
+            logger.info(f"   Reason: No markets met +EV threshold ({self.config.get('min_ev_threshold', 0.05):.1%})")
+        logger.info("="*60)
         
         # Sort by expected value
         opportunities.sort(key=lambda x: x.get('expected_value', 0), reverse=True)
         
         return opportunities
     
-    async def _scan_kalshi(self) -> List[Dict]:
+    async def _scan_kalshi(self) -> tuple:
         """
         Scan Kalshi for +EV opportunities
-        
-        High-value categories:
-        - Weather markets (predictable with meteorological data)
-        - Sports (with good data sources)
-        - Finance/Economic events
+        Returns: (opportunities_list, details_dict)
         """
         opportunities = []
+        details = {
+            'cities_checked': 0,
+            'weather_markets_found': 0,
+            'markets_with_data': 0,
+            'rejected_low_ev': 0,
+            'rejected_no_data': 0,
+        }
         
         try:
             # Import Kalshi client
@@ -84,25 +109,70 @@ class MarketScanner:
             
             client = KalshiClient(api_key_id=api_key_id, api_key=api_key)
             
-            # Get active markets
-            markets = client.get_markets(limit=100, status='active')
+            # Cities we monitor
+            cities = ['new york', 'nyc', 'los angeles', 'la', 'chicago', 'london', 'tokyo']
+            details['cities_checked'] = len(cities)
+            
+            # Get open markets (status='active' returns 400 on new API)
+            logger.info("   📥 Fetching open markets from Kalshi...")
+            markets = client.get_markets(limit=100, status='open')
+            logger.info(f"   📊 Retrieved {len(markets)} active markets")
+            
+            # Filter for weather markets
+            weather_keywords = ['rain', 'temperature', 'snow', 'weather']
+            weather_markets = []
             
             for market in markets:
+                title = market.get('title', '').lower()
+                if any(word in title for word in weather_keywords):
+                    # Check if it's for one of our monitored cities
+                    if any(city in title for city in cities):
+                        weather_markets.append(market)
+            
+            details['weather_markets_found'] = len(weather_markets)
+            logger.info(f"   🌦️  Found {len(weather_markets)} weather markets for monitored cities")
+            
+            # Analyze each weather market
+            for i, market in enumerate(weather_markets, 1):
                 ticker = market.get('ticker', '')
                 title = market.get('title', '')
                 
-                # Check for weather markets
-                if any(word in title.lower() for word in ['rain', 'temperature', 'snow', 'weather']):
-                    opp = await self._analyze_kalshi_weather(client, market)
-                    if opp:
-                        opportunities.append(opp)
+                logger.info(f"   [{i}/{len(weather_markets)}] Analyzing: {ticker}")
+                
+                opp = await self._analyze_kalshi_weather(client, market, details)
+                
+                if opp:
+                    opportunities.append(opp)
+                    details['markets_with_data'] += 1
+                    
+                    # Log the analysis
+                    ev = opp.get('expected_value', 0)
+                    our_prob = opp.get('our_probability', 0)
+                    market_prob = opp.get('market_probability', 0)
+                    
+                    logger.info(f"      ✅ Data fetched: Weather code={opp.get('weather_code')}, "
+                              f"Rain prob={our_prob:.1%}")
+                    logger.info(f"      💰 Market price: {market_prob:.1%} | Our model: {our_prob:.1%} | "
+                              f"EV: {ev:+.1%}")
+                    
+                    if ev < self.config.get('min_ev_threshold', 0.05):
+                        logger.info(f"      ❌ REJECTED: EV {ev:.1%} below threshold "
+                                  f"({self.config.get('min_ev_threshold', 0.05):.1%})")
+                        details['rejected_low_ev'] += 1
+                    else:
+                        logger.info(f"      ✓ PASSED: EV {ev:.1%} meets threshold")
+                else:
+                    details['rejected_no_data'] += 1
+                    logger.info(f"      ⚠️  Could not fetch weather data or no matching city")
                         
         except Exception as e:
-            print(f"Kalshi scan error: {e}")
+            logger.error(f"Kalshi scan error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         
-        return opportunities
+        return opportunities, details
     
-    async def _analyze_kalshi_weather(self, client, market: Dict) -> Optional[Dict]:
+    async def _analyze_kalshi_weather(self, client, market: Dict, details: Dict = None) -> Optional[Dict]:
         """Analyze a Kalshi weather market with real weather data"""
         ticker = market.get('ticker', '')
         title = market.get('title', '')
@@ -153,6 +223,9 @@ class MarketScanner:
         our_probability = self._weather_code_to_rain_prob(tomorrow_code, tomorrow_rain)
         
         # Get actual market price from Kalshi
+        market_probability = None
+        price_source = "unknown"
+        
         try:
             orderbook = client.get_orderbook(ticker)
             
@@ -169,22 +242,29 @@ class MarketScanner:
                 # Use midpoint as market probability
                 if best_bid > 0 and best_ask > 0:
                     market_probability = (best_bid + best_ask) / 2
+                    price_source = f"orderbook (bid={best_bid:.2f}, ask={best_ask:.2f})"
                 elif best_bid > 0:
                     market_probability = best_bid
+                    price_source = f"bid_only ({best_bid:.2f})"
                 elif best_ask > 0:
                     market_probability = best_ask
+                    price_source = f"ask_only ({best_ask:.2f})"
                 else:
                     market_probability = market.get('last_price', 50) / 100
+                    price_source = f"last_price ({market.get('last_price', 50)}¢)"
             else:
                 market_probability = market.get('last_price', 50) / 100
+                price_source = f"last_price ({market.get('last_price', 50)}¢)"
                 
         except Exception as e:
             market_probability = market.get('last_price', 50) / 100
+            price_source = f"last_price_fallback ({market.get('last_price', 50)}¢)"
         
         # Calculate expected value
         expected_value = our_probability - market_probability
         
-        return {
+        # Only return if it passes validation
+        opp = {
             'market': title,
             'ticker': ticker,
             'platform': 'kalshi',
@@ -198,7 +278,10 @@ class MarketScanner:
             'city': city_name,
             'weather_code': tomorrow_code,
             'precipitation_mm': tomorrow_rain,
+            'price_source': price_source,
         }
+        
+        return opp
     
     async def _analyze_weather_markets(self) -> List[Dict]:
         """
@@ -213,6 +296,8 @@ class MarketScanner:
             {'name': 'Los Angeles', 'lat': 34.0522, 'lon': -118.2437},
             {'name': 'Chicago', 'lat': 41.8781, 'lon': -87.6298},
         ]
+        
+        logger.info("   🌍 Fetching weather forecasts:")
         
         # Fetch fresh weather data for each city
         for city in cities:
@@ -229,11 +314,12 @@ class MarketScanner:
                     tomorrow_rain = precipitation[1] if len(precipitation) > 1 else 0
                     rain_prob = self._weather_code_to_rain_prob(tomorrow_code, tomorrow_rain)
                     
-                    print(f"[SCANNER] Weather for {city['name']}: code={tomorrow_code}, "
-                          f"rain={tomorrow_rain}mm, prob={rain_prob:.1%}")
-                
-                # The actual market matching happens in _scan_kalshi
-                # which looks for these cities in market titles
+                    logger.info(f"      📍 {city['name']}: Weather code={tomorrow_code}, "
+                              f"Rain={tomorrow_rain}mm → Our prob={rain_prob:.1%}")
+                else:
+                    logger.warning(f"      ⚠️  {city['name']}: Incomplete weather data")
+            else:
+                logger.error(f"      ❌ {city['name']}: Failed to fetch weather data")
         
         return opportunities
     
