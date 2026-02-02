@@ -169,8 +169,6 @@ class TradingAgent:
                 await self.portfolio.record_trade(result)
                 await self.alerts.send_trade_notification(result)
                 logger.info(f"✅ TRADE EXECUTED: {trade['market'][:40]} | Size: ${position_size:.2f}")
-            else:
-                logger.error(f"❌ Trade failed: {result.get('error', 'Unknown')}")
                 
                 # Update bankroll for next calculation
                 current_bankroll = await self.portfolio.get_current_bankroll()

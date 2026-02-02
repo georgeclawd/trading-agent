@@ -47,76 +47,193 @@ class MarketScanner:
         """Scan all markets for +EV opportunities"""
         opportunities = []
         
-        # Polymarket opportunities
-        poly_opps = await self._scan_polymarket()
-        opportunities.extend(poly_opps)
+        # Real weather-based opportunities
+        weather_opps = await self._analyze_weather_markets()
+        opportunities.extend(weather_opps)
+        
+        # Kalshi markets
+        kalshi_opps = await self._scan_kalshi()
+        opportunities.extend(kalshi_opps)
         
         # Sort by expected value
         opportunities.sort(key=lambda x: x.get('expected_value', 0), reverse=True)
         
         return opportunities
     
-    async def _scan_polymarket(self) -> List[Dict]:
+    async def _scan_kalshi(self) -> List[Dict]:
         """
-        Scan Polymarket for +EV opportunities
+        Scan Kalshi for +EV opportunities
         
         High-value categories:
         - Weather markets (predictable with meteorological data)
         - Sports (with good data sources)
-        - Crypto prices (short-term predictions)
+        - Finance/Economic events
         """
         opportunities = []
         
-        # This would integrate with Polymarket API
-        # For now, return example structure
-        
-        # Example: Weather market
-        # "Will it rain in NYC tomorrow?"
-        # Weather API says 80% chance of rain
-        # Market pricing: Yes at $0.65 (implied 65%)
-        # Edge: 15% -> +EV
-        
-        weather_opp = {
-            'market': 'Weather - NYC Rain Tomorrow',
-            'platform': 'polymarket',
-            'market_id': 'example-weather-001',
-            'our_probability': 0.80,  # From weather API
-            'market_probability': 0.65,  # From Polymarket pricing
-            'odds': 1.54,  # $1 / 0.65
-            'expected_value': 0.15,  # 15% edge
-            'data_source': 'open-meteo',
-            'confidence': 0.95,
-            'category': 'weather',
-        }
-        
-        if self._validate_opportunity(weather_opp):
-            opportunities.append(weather_opp)
+        try:
+            # Import Kalshi client
+            from kalshi_client import KalshiClient
+            import subprocess
+            
+            # Load credentials
+            api_key_id = subprocess.run(['pass', 'show', 'kalshi/api_key_id'], 
+                                       capture_output=True, text=True).stdout.strip().split('\n')[0]
+            api_key = subprocess.run(['pass', 'show', 'kalshi/api_key'], 
+                                    capture_output=True, text=True).stdout.strip()
+            
+            client = KalshiClient(api_key_id=api_key_id, api_key=api_key)
+            
+            # Get active markets
+            markets = client.get_markets(limit=100, status='active')
+            
+            for market in markets:
+                ticker = market.get('ticker', '')
+                title = market.get('title', '')
+                
+                # Check for weather markets
+                if any(word in title.lower() for word in ['rain', 'temperature', 'snow', 'weather']):
+                    opp = await self._analyze_kalshi_weather(client, market)
+                    if opp:
+                        opportunities.append(opp)
+                        
+        except Exception as e:
+            print(f"Kalshi scan error: {e}")
         
         return opportunities
     
+    async def _analyze_kalshi_weather(self, client, market: Dict) -> Optional[Dict]:
+        """Analyze a Kalshi weather market with real weather data"""
+        ticker = market.get('ticker', '')
+        title = market.get('title', '')
+        
+        # Parse location from title (basic parsing)
+        cities = {
+            'new york': (40.7128, -74.0060),
+            'nyc': (40.7128, -74.0060),
+            'los angeles': (34.0522, -118.2437),
+            'la': (34.0522, -118.2437),
+            'chicago': (41.8781, -87.6298),
+            'london': (51.5074, -0.1278),
+            'tokyo': (35.6762, 139.6503),
+        }
+        
+        # Find city in title
+        city_name = None
+        city_coords = None
+        title_lower = title.lower()
+        
+        for city, coords in cities.items():
+            if city in title_lower:
+                city_name = city.title()
+                city_coords = coords
+                break
+        
+        if not city_coords:
+            return None
+        
+        # Fetch real weather data
+        weather_data = await self._fetch_weather(city_coords[0], city_coords[1])
+        
+        if not weather_data:
+            return None
+        
+        # Calculate our probability from weather data
+        daily = weather_data.get('daily', {})
+        weather_codes = daily.get('weathercode', [])
+        precipitation = daily.get('precipitation_sum', [])
+        
+        if not weather_codes or len(weather_codes) < 2:
+            return None
+        
+        # Tomorrow's weather (index 1)
+        tomorrow_code = weather_codes[1]
+        tomorrow_rain = precipitation[1] if len(precipitation) > 1 else 0
+        
+        our_probability = self._weather_code_to_rain_prob(tomorrow_code, tomorrow_rain)
+        
+        # Get actual market price from Kalshi
+        try:
+            orderbook = client.get_orderbook(ticker)
+            
+            if orderbook:
+                yes_bids = orderbook.get('yes', [])
+                yes_asks = orderbook.get('no', [])
+                
+                # Get best bid and ask
+                best_bid = yes_bids[0].get('price', 0) / 100 if yes_bids else 0
+                # Convert NO ask to YES price
+                no_ask = yes_asks[0].get('price', 0) if yes_asks else 0
+                best_ask = (100 - no_ask) / 100 if no_ask > 0 else 0
+                
+                # Use midpoint as market probability
+                if best_bid > 0 and best_ask > 0:
+                    market_probability = (best_bid + best_ask) / 2
+                elif best_bid > 0:
+                    market_probability = best_bid
+                elif best_ask > 0:
+                    market_probability = best_ask
+                else:
+                    market_probability = market.get('last_price', 50) / 100
+            else:
+                market_probability = market.get('last_price', 50) / 100
+                
+        except Exception as e:
+            market_probability = market.get('last_price', 50) / 100
+        
+        # Calculate expected value
+        expected_value = our_probability - market_probability
+        
+        return {
+            'market': title,
+            'ticker': ticker,
+            'platform': 'kalshi',
+            'our_probability': our_probability,
+            'market_probability': market_probability,
+            'expected_value': expected_value,
+            'odds': 1 / market_probability if market_probability > 0 else 0,
+            'data_source': 'open-meteo',
+            'confidence': 0.90,
+            'category': 'weather',
+            'city': city_name,
+            'weather_code': tomorrow_code,
+            'precipitation_mm': tomorrow_rain,
+        }
+    
     async def _analyze_weather_markets(self) -> List[Dict]:
         """
-        Analyze weather prediction markets
+        Analyze weather prediction markets on Kalshi
         These are goldmines - weather is highly predictable 24-48h out
         """
         opportunities = []
         
-        # Get weather data for major cities
+        # Get weather data for major cities that have Kalshi markets
         cities = [
             {'name': 'New York', 'lat': 40.7128, 'lon': -74.0060},
-            {'name': 'London', 'lat': 51.5074, 'lon': -0.1278},
-            {'name': 'Tokyo', 'lat': 35.6762, 'lon': 139.6503},
+            {'name': 'Los Angeles', 'lat': 34.0522, 'lon': -118.2437},
+            {'name': 'Chicago', 'lat': 41.8781, 'lon': -87.6298},
         ]
         
+        # Fetch fresh weather data for each city
         for city in cities:
             weather_data = await self._fetch_weather(city['lat'], city['lon'])
             
             if weather_data:
-                # Check if there are Polymarket markets for this
-                # Compare our prediction vs market pricing
-                opp = self._create_weather_opportunity(city, weather_data)
-                if opp:
-                    opportunities.append(opp)
+                # Log the fresh data for debugging
+                daily = weather_data.get('daily', {})
+                weather_codes = daily.get('weathercode', [])
+                precipitation = daily.get('precipitation_sum', [])
+                
+                if weather_codes and len(weather_codes) > 1:
+                    tomorrow_code = weather_codes[1]
+                    tomorrow_rain = precipitation[1] if len(precipitation) > 1 else 0
+                    rain_prob = self._weather_code_to_rain_prob(tomorrow_code, tomorrow_rain)
+                    
+                    print(f"[SCANNER] Weather for {city['name']}: code={tomorrow_code}, "
+                          f"rain={tomorrow_rain}mm, prob={rain_prob:.1%}")
+                
+                # The actual market matching happens in _scan_kalshi
+                # which looks for these cities in market titles
         
         return opportunities
     
