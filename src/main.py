@@ -118,15 +118,32 @@ class TradingAgent:
         
         logger.info(f"🔍 Found {len(opportunities)} potential trades")
         
+        # Log details of first opportunity for visibility
+        if opportunities:
+            first_opp = opportunities[0]
+            logger.info(f"  → Best: {first_opp.get('market', 'Unknown')[:40]}...")
+            logger.info(f"  → Category: {first_opp.get('category', 'unknown')}")
+            logger.info(f"  → Our Prob: {first_opp.get('our_probability', 0):.1%}")
+            logger.info(f"  → Market Prob: {first_opp.get('market_probability', 0):.1%}")
+        
         # 4. Filter and rank by EV
         valid_trades = []
+        min_ev = self.config['min_ev_threshold']
+        
         for opp in opportunities:
             ev = self.risk_manager.calculate_ev(opp)
-            if ev > self.config['min_ev_threshold']:
+            logger.debug(f"  Calculating EV for {opp.get('market', 'Unknown')[:30]}: {ev:.2%}")
+            
+            if ev > min_ev:
                 opp['expected_value'] = ev
                 valid_trades.append(opp)
+                logger.info(f"  ✓ Passed EV threshold: {ev:.2%} > {min_ev:.2%}")
+            else:
+                logger.info(f"  ✗ Below EV threshold: {ev:.2%} < {min_ev:.2%}")
         
         valid_trades.sort(key=lambda x: x['expected_value'], reverse=True)
+        
+        logger.info(f"📊 {len(valid_trades)} trades passed EV filter")
         
         # 5. Execute best trades
         for trade in valid_trades[:3]:  # Max 3 trades per cycle
@@ -137,8 +154,13 @@ class TradingAgent:
                 odds=trade['odds']
             )
             
+            logger.info(f"  💰 Calculated position size: ${position_size:.2f}")
+            
             if position_size < 1.0:  # Minimum $1
+                logger.info(f"  ✗ Position too small (${position_size:.2f} < $1.00)")
                 continue
+            
+            logger.info(f"  🚀 Executing: {trade['market'][:40]}... | Size: ${position_size:.2f}")
             
             # Execute trade
             result = await self.trade_executor.execute_trade(trade, position_size)
@@ -146,7 +168,9 @@ class TradingAgent:
             if result['success']:
                 await self.portfolio.record_trade(result)
                 await self.alerts.send_trade_notification(result)
-                logger.info(f"✅ Executed: {trade['market']} | Size: ${position_size:.2f}")
+                logger.info(f"✅ TRADE EXECUTED: {trade['market'][:40]} | Size: ${position_size:.2f}")
+            else:
+                logger.error(f"❌ Trade failed: {result.get('error', 'Unknown')}")
                 
                 # Update bankroll for next calculation
                 current_bankroll = await self.portfolio.get_current_bankroll()
