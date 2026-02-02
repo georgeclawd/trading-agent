@@ -44,8 +44,8 @@ class CryptoMomentumStrategy(BaseStrategy):
         
         # Price sources
         self.price_sources = [
-            'https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT',
             'https://api.coinbase.com/v2/exchange-rates?currency=BTC',
+            'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd',
         ]
         
         self.session: Optional[aiohttp.ClientSession] = None
@@ -76,18 +76,17 @@ class CryptoMomentumStrategy(BaseStrategy):
         except Exception as e:
             logger.debug(f"Binance price fetch failed: {e}")
         
-        # Try Coinbase
+        # Try CoinGecko
         try:
             async with session.get(self.price_sources[1], timeout=5) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    rate = data.get('data', {}).get('rates', {}).get('USD', 0)
-                    if rate:
-                        price = 1.0 / float(rate)  # Convert from BTC/USD to USD/BTC
-                        prices.append(price)
-                        logger.debug(f"Coinbase BTC price: ${price:,.2f}")
+                    price = data.get('bitcoin', {}).get('usd', 0)
+                    if price > 0:
+                        prices.append(float(price))
+                        logger.debug(f"CoinGecko BTC price: ${price:,.2f}")
         except Exception as e:
-            logger.debug(f"Coinbase price fetch failed: {e}")
+            logger.debug(f"CoinGecko price fetch failed: {e}")
         
         if not prices:
             return None
