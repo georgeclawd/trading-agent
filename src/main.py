@@ -139,6 +139,48 @@ class TradingAgent:
         
         logger.info(f"✅ Registered {len(self.strategy_manager.strategies)} strategies")
     
+    async def _price_fetcher_loop(self):
+        """
+        Background task to fetch BTC prices every minute for CryptoMomentum strategy
+        """
+        logger.info("📈 Starting BTC price fetcher (1-minute intervals)")
+        
+        # Get crypto strategy
+        crypto_strategy = None
+        for strategy in self.strategy_manager.strategies:
+            if strategy.name == "CryptoMomentum":
+                crypto_strategy = strategy
+                break
+        
+        if not crypto_strategy:
+            logger.warning("CryptoMomentum strategy not found, price fetcher stopping")
+            return
+        
+        while self.running:
+            try:
+                # Fetch BTC price
+                price = await crypto_strategy.fetch_btc_price()
+                if price:
+                    # Add to strategy's price history
+                    crypto_strategy.add_price_point(price)
+                    
+                    # Log progress periodically
+                    candles = len(crypto_strategy.price_history)
+                    if candles < 20:
+                        if candles % 5 == 0 or candles == 1:
+                            logger.info(f"📊 BTC Price History: {candles}/20 candles")
+                    else:
+                        # Show indicator preview when ready
+                        if candles == 20:
+                            logger.info("✅ BTC Price History complete! Indicators ready")
+                
+                # Wait 60 seconds
+                await asyncio.sleep(60)
+                
+            except Exception as e:
+                logger.error(f"Price fetcher error: {e}")
+                await asyncio.sleep(60)
+    
     async def run(self):
         """Main trading loop - runs 24/7 with multiple strategies"""
         logger.info("🚀 Trading Agent v2 starting...")
@@ -153,6 +195,9 @@ class TradingAgent:
             "🚀 Trading Agent v2 Started", 
             f"Bankroll: ${self.config['initial_bankroll']}\nStrategies: {len(self.strategy_manager.strategies)}"
         )
+        
+        # Start background price fetcher
+        price_fetcher_task = asyncio.create_task(self._price_fetcher_loop())
         
         while self.running:
             try:
@@ -174,6 +219,9 @@ class TradingAgent:
                 logger.error(f"Error in trading cycle: {e}", exc_info=True)
                 await self.alerts.send_alert("❌ Trading Error", str(e))
                 await asyncio.sleep(60)
+        
+        # Clean up
+        price_fetcher_task.cancel()
     
     async def _trading_cycle(self):
         """Execute all strategies"""
