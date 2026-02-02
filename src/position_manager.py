@@ -161,20 +161,16 @@ class PositionManager:
         data = {ticker: pos.to_dict() for ticker, pos in self.simulated_positions.items()}
         self._atomic_save(self.simulated_file, data)
     
-    def has_position_today(self, ticker: str, simulated: bool = False) -> bool:
-        """Check if we already have an open position for this ticker from today"""
+    def has_open_position(self, ticker: str, simulated: bool = False) -> bool:
+        """Check if we already have an OPEN position for this ticker"""
         positions_dict = self.simulated_positions if simulated else self.positions
         
         if ticker not in positions_dict:
             return False
         
         pos = positions_dict[ticker]
-        try:
-            entry_date = datetime.fromisoformat(pos.entry_time).date()
-            today = datetime.now().date()
-            return entry_date == today
-        except:
-            return False
+        # Only check if position is still open (not closed)
+        return pos.status == 'open'
     
     def open_position(self, ticker: str, side: str, contracts: int, 
                       entry_price: float, strategy: str, simulated: bool,
@@ -194,9 +190,9 @@ class PositionManager:
             expected_settlement: ISO datetime when market settles
             check_duplicate: If True, skip if position already exists today
         """
-        # Check for duplicate from today
-        if check_duplicate and self.has_position_today(ticker, simulated):
-            logger.debug(f"PositionManager: Skipping {ticker} - already traded today")
+        # Check for duplicate (already have open position)
+        if check_duplicate and self.has_open_position(ticker, simulated):
+            logger.debug(f"PositionManager: Skipping {ticker} - already have open position")
             return None
         
         position = Position(

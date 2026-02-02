@@ -69,7 +69,7 @@ class WeatherPredictionStrategy(BaseStrategy):
                     if recorded:
                         logger.info(f"    [SIMULATED] ✓ Would execute: {ticker} (EV: {opp.get('expected_value'):.1%})")
                     else:
-                        logger.debug(f"    [SIMULATED] Skipping {ticker} - already traded today")
+                        logger.debug(f"    [SIMULATED] Skipping {ticker} - already have open position")
                         continue
                 else:
                     # REAL: Execute via Kalshi API
@@ -91,7 +91,7 @@ class WeatherPredictionStrategy(BaseStrategy):
                             if recorded:
                                 logger.info(f"    [REAL] ✓ Executed: {ticker} (EV: {opp.get('expected_value'):.1%}) Order: {result['order_id']}")
                             else:
-                                logger.debug(f"    [REAL] Skipping {ticker} - already traded today")
+                                logger.debug(f"    [REAL] Skipping {ticker} - already have open position")
                         else:
                             logger.error(f"    [REAL] ✗ Order failed: {result}")
                     except Exception as e:

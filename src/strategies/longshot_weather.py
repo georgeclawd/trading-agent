@@ -458,7 +458,7 @@ class LongshotWeatherStrategy(BaseStrategy):
                     logger.info(f"    [SIMULATED] ✓ Would execute: {ticker[:30]}... "
                                f"at {opp['market_price']:.1%}, edge={opp['expected_value']:.1%}")
                 else:
-                    logger.debug(f"    [SIMULATED] Skipping {ticker[:30]}... - already traded today")
+                    logger.debug(f"    [SIMULATED] Skipping {ticker[:30]}... - already have open position")
                     continue
             else:
                 # REAL: Execute via Kalshi API
@@ -481,7 +481,7 @@ class LongshotWeatherStrategy(BaseStrategy):
                             logger.info(f"    [REAL] ✓ Executed: {ticker[:30]}... "
                                        f"at {opp['market_price']:.1%}, edge={opp['expected_value']:.1%} Order: {result['order_id']}")
                         else:
-                            logger.debug(f"    [REAL] Skipping {ticker[:30]}... - already traded today")
+                            logger.debug(f"    [REAL] Skipping {ticker[:30]}... - already have open position")
                     else:
                         logger.error(f"    [REAL] ✗ Order failed: {result}")
                 except Exception as e:
