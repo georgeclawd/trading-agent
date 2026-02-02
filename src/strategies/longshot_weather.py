@@ -365,12 +365,13 @@ class LongshotWeatherStrategy(BaseStrategy):
                 continue
             
             # Get forecast for relevant date
-            # Try to extract date from ticker (format: YY-MMM-DD, e.g., 26FEB03)
-            date_match = re.search(r'-([A-Z]{3})(\d{2})-', ticker)
+            # Try to extract date from ticker (format: YY-MMM-DD in series, e.g., KXHIGHNY-26FEB03-T37)
+            # Pattern: 2-digit year, 3-letter month, 2-digit day
+            date_match = re.search(r'-\d{2}([A-Z]{3})(\d{2})-', ticker)
             if date_match:
                 month_str = date_match.group(1)
                 day = date_match.group(2)
-                months = {'JAN': 1, 'FEB': 2, 'MAR': 3}
+                months = {'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6}
                 month = months.get(month_str, 2)
                 
                 forecast_date = f"2026-{month:02d}-{int(day):02d}"
