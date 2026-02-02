@@ -38,17 +38,20 @@ class LongshotWeatherStrategy(BaseStrategy):
         self.market_scanner = market_scanner
         
         # Strategy parameters (from $64K bot)
-        self.max_market_price = 0.10  # Only markets < 10¢
+        self.max_market_price = 0.20  # Only markets < 20¢ (adjusted for Kalshi)
         self.min_liquidity = 50  # $50 minimum
         self.deviation_f = 3.5  # ±3.5°F deviation
         self.min_edge = 0.20  # Minimum 20% edge for cheap markets
         self.max_position = config.get('max_position_size', 5)
         
-        # Cities to monitor (original bot: London, NYC, Seoul)
+        # Cities to monitor (Kalshi weather markets)
         self.cities = {
-            'London': {'lat': 51.5074, 'lon': -0.1278},
-            'New York': {'lat': 40.7128, 'lon': -74.0060},
-            'Seoul': {'lat': 37.5665, 'lon': 126.9780}
+            'New York': {'lat': 40.7128, 'lon': -74.0060, 'kalshi_key': ['NYC', 'New York']},
+            'Chicago': {'lat': 41.8781, 'lon': -87.6298, 'kalshi_key': ['CHI', 'Chicago']},
+            'Philadelphia': {'lat': 39.9526, 'lon': -75.1652, 'kalshi_key': ['PHIL', 'Philadelphia']},
+            'Los Angeles': {'lat': 34.0522, 'lon': -118.2437, 'kalshi_key': ['LAX', 'Los Angeles']},
+            'Seattle': {'lat': 47.6062, 'lon': -122.3321, 'kalshi_key': ['SEA', 'Seattle']},
+            'Houston': {'lat': 29.7604, 'lon': -95.3698, 'kalshi_key': ['HOU', 'Houston']},
         }
         
         self.session: Optional[aiohttp.ClientSession] = None
@@ -191,11 +194,15 @@ class LongshotWeatherStrategy(BaseStrategy):
             # Check if it's a weather market
             is_weather = any(k in title for k in ['temp', 'temperature', 'high', 'low'])
             
-            # Check if it's in our cities
+            # Check if it's in our cities (using kalshi_key list)
             city_match = None
-            for city in self.cities.keys():
-                if city.lower() in title or city.lower().replace(' ', '') in title:
-                    city_match = city
+            for city, data in self.cities.items():
+                kalshi_keys = data.get('kalshi_key', [])
+                for key in kalshi_keys:
+                    if key.lower() in title or key.lower() in ticker.lower():
+                        city_match = city
+                        break
+                if city_match:
                     break
             
             if is_weather and city_match:
@@ -216,7 +223,7 @@ class LongshotWeatherStrategy(BaseStrategy):
                 except:
                     continue
         
-        logger.info(f"  LongshotWeather: Found {len(weather_markets)} cheap weather markets (<10¢)")
+        logger.info(f"  LongshotWeather: Found {len(weather_markets)} cheap weather markets (<20¢)")
         
         # Analyze each cheap market
         for item in weather_markets:
@@ -227,8 +234,8 @@ class LongshotWeatherStrategy(BaseStrategy):
             title = item['title']
             
             # Get weather forecast
-            coords = self.cities[city]
-            forecast = await self.fetch_weather_forecast(city, coords['lat'], coords['lon'])
+            city_data = self.cities[city]
+            forecast = await self.fetch_weather_forecast(city, city_data['lat'], city_data['lon'])
             
             if not forecast:
                 continue
