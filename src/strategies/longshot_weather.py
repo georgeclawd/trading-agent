@@ -172,11 +172,54 @@ class LongshotWeatherStrategy(BaseStrategy):
             return 0
         return (fair_price - market_price) / market_price
     
+    def extract_city_from_market(self, title: str, ticker: str) -> Optional[Tuple[str, Dict]]:
+        """
+        Dynamically extract city from market title/ticker
+        Returns (city_name, city_data) or None
+        """
+        title_lower = title.lower()
+        ticker_lower = ticker.lower()
+        
+        # Check known cities first
+        for city, data in self.cities.items():
+            kalshi_keys = data.get('kalshi_key', [])
+            for key in kalshi_keys:
+                if key.lower() in title_lower or key.lower() in ticker_lower:
+                    return city, data
+        
+        # Try to extract city from title patterns
+        # Pattern: "high temp in [CITY]" or "[CITY] temperature"
+        import re
+        
+        # Common city names to check
+        city_patterns = {
+            'New York': {'lat': 40.7128, 'lon': -74.0060},
+            'Chicago': {'lat': 41.8781, 'lon': -87.6298},
+            'Philadelphia': {'lat': 39.9526, 'lon': -75.1652},
+            'Los Angeles': {'lat': 34.0522, 'lon': -118.2437},
+            'Seattle': {'lat': 47.6062, 'lon': -122.3321},
+            'Houston': {'lat': 29.7604, 'lon': -95.3698},
+            'Miami': {'lat': 25.7617, 'lon': -80.1918},
+            'Boston': {'lat': 42.3601, 'lon': -71.0589},
+            'Denver': {'lat': 39.7392, 'lon': -104.9903},
+            'Atlanta': {'lat': 33.7490, 'lon': -84.3880},
+            'Phoenix': {'lat': 33.4484, 'lon': -112.0740},
+            'London': {'lat': 51.5074, 'lon': -0.1278},
+            'Seoul': {'lat': 37.5665, 'lon': 126.9780},
+            'Tokyo': {'lat': 35.6762, 'lon': 139.6503},
+        }
+        
+        for city_name, coords in city_patterns.items():
+            if city_name.lower() in title_lower:
+                return city_name, coords
+        
+        return None, None
+    
     async def scan(self) -> List[Dict]:
-        """Scan for longshot weather opportunities"""
+        """Scan for longshot weather opportunities - DYNAMIC DISCOVERY"""
         opportunities = []
         
-        logger.info("  LongshotWeather: Scanning for cheap weather markets...")
+        logger.info("  LongshotWeather: Dynamically discovering liquid weather markets...")
         
         # Get all markets
         try:
@@ -185,56 +228,90 @@ class LongshotWeatherStrategy(BaseStrategy):
             logger.error(f"  LongshotWeather: Error fetching markets: {e}")
             return opportunities
         
-        # Filter for weather markets in our cities
-        weather_markets = []
+        # First pass: Find weather markets with ACTUAL LIQUIDITY
+        liquid_weather = []
         for m in markets:
-            title = m.get('title', '').lower()
+            title = m.get('title', '')
+            title_lower = title.lower()
             ticker = m.get('ticker', '')
             
             # Check if it's a weather market
-            is_weather = any(k in title for k in ['temp', 'temperature', 'high', 'low'])
+            is_weather = any(k in title_lower for k in ['temp', 'temperature', 'high', 'low', 'rain', 'snow'])
             
-            # Check if it's in our cities (using kalshi_key list)
-            city_match = None
-            for city, data in self.cities.items():
-                kalshi_keys = data.get('kalshi_key', [])
-                for key in kalshi_keys:
-                    if key.lower() in title or key.lower() in ticker.lower():
-                        city_match = city
-                        break
-                if city_match:
-                    break
+            if not is_weather:
+                continue
             
-            if is_weather and city_match:
-                # Check if cheap (<10¢)
-                try:
-                    orderbook = self.client.get_orderbook(ticker)
-                    yes_bids = orderbook.get('yes', [])
-                    if yes_bids:
-                        market_price = yes_bids[0].get('price', 100) / 100
-                        if market_price < self.max_market_price:
-                            weather_markets.append({
-                                'market': m,
-                                'city': city_match,
-                                'market_price': market_price,
-                                'ticker': ticker,
-                                'title': m.get('title', '')
-                            })
-                except:
-                    continue
+            # Check for liquidity (this is the key filter)
+            try:
+                orderbook = self.client.get_orderbook(ticker)
+                yes_bids = orderbook.get('yes', [])
+                no_bids = orderbook.get('no', [])
+                
+                if yes_bids and no_bids:
+                    yes_price = yes_bids[0].get('price', 100) / 100
+                    no_price = no_bids[0].get('price', 100) / 100
+                    
+                    # Only keep markets with actual prices
+                    liquid_weather.append({
+                        'market': m,
+                        'ticker': ticker,
+                        'title': title,
+                        'yes_price': yes_price,
+                        'no_price': no_price,
+                        'volume': m.get('volume', 0)
+                    })
+            except:
+                continue
         
-        logger.info(f"  LongshotWeather: Found {len(weather_markets)} cheap weather markets (<20¢)")
+        logger.info(f"  LongshotWeather: Found {len(liquid_weather)} weather markets WITH LIQUIDITY")
+        
+        # Second pass: Filter for cheap markets and extract cities
+        cheap_markets = []
+        for item in liquid_weather:
+            yes_price = item['yes_price']
+            no_price = item['no_price']
+            
+            # Check if either side is cheap
+            if yes_price < self.max_market_price or no_price < self.max_market_price:
+                # Determine which side is cheap
+                if yes_price < no_price:
+                    market_price = yes_price
+                    side = 'YES'
+                else:
+                    market_price = no_price
+                    side = 'NO'
+                
+                # Extract city
+                city, city_data = self.extract_city_from_market(item['title'], item['ticker'])
+                
+                if city and city_data:
+                    cheap_markets.append({
+                        **item,
+                        'market_price': market_price,
+                        'side': side,
+                        'city': city,
+                        'city_data': city_data
+                    })
+        
+        logger.info(f"  LongshotWeather: Found {len(cheap_markets)} cheap weather markets (<{self.max_market_price:.0%})")
+        
+        # Log discovered markets for visibility
+        if cheap_markets:
+            logger.info(f"  LongshotWeather: Discovered liquid markets in: {', '.join(set(m['city'] for m in cheap_markets))}")
         
         # Analyze each cheap market
-        for item in weather_markets:
+        
+        # Analyze each cheap market
+        for item in cheap_markets:
             market = item['market']
             city = item['city']
+            city_data = item['city_data']
             market_price = item['market_price']
             ticker = item['ticker']
             title = item['title']
+            cheap_side = item['side']
             
             # Get weather forecast
-            city_data = self.cities[city]
             forecast = await self.fetch_weather_forecast(city, city_data['lat'], city_data['lon'])
             
             if not forecast:
