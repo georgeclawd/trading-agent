@@ -27,8 +27,8 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/trading.log'),
-        logging.StreamHandler()
+        logging.FileHandler('logs/trading.log')
+        # Note: StreamHandler removed to avoid duplicate logs when using shell redirect
     ]
 )
 logger = logging.getLogger('TradingAgent')
@@ -197,8 +197,12 @@ class TradingAgent:
             logger.warning("CryptoMomentum strategy not found, price fetcher stopping")
             return
         
+        cycle_count = 0
         while self.running:
+            cycle_count += 1
             try:
+                logger.debug(f"Price fetcher cycle #{cycle_count}")
+                
                 # Fetch 1m candles (this updates the price history)
                 candles = await crypto_strategy.fetch_1m_candles()
                 
@@ -212,12 +216,17 @@ class TradingAgent:
                         # Show indicator preview when ready
                         if num_candles == 30:
                             logger.info("✅ BTC 1m Candles complete! Indicators ready")
+                else:
+                    logger.warning("Price fetcher: No candles returned")
                 
                 # Wait 60 seconds
                 await asyncio.sleep(60)
                 
+            except asyncio.CancelledError:
+                logger.info("Price fetcher cancelled")
+                break
             except Exception as e:
-                logger.error(f"Price fetcher error: {e}")
+                logger.error(f"Price fetcher error: {e}", exc_info=True)
                 await asyncio.sleep(60)
     
     async def run(self):
