@@ -289,7 +289,15 @@ class TradingAgent:
     
     async def _strategy_loop(self, strategy):
         """Run a single strategy in its own loop with its own interval"""
-        strategy_config = self.config.get('strategies', {}).get(strategy.name.lower(), {})
+        # Map strategy names to config keys
+        name_to_key = {
+            'WeatherPrediction': 'weather_prediction',
+            'SpreadTrading': 'spread_trading',
+            'CryptoMomentum': 'crypto_momentum',
+            'LongshotWeather': 'longshot_weather'
+        }
+        config_key = name_to_key.get(strategy.name, strategy.name.lower())
+        strategy_config = self.config.get('strategies', {}).get(config_key, {})
         interval = strategy_config.get('scan_interval', self.config['scan_interval'])
         
         # Convert interval to minutes for display
