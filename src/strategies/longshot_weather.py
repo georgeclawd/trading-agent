@@ -11,7 +11,7 @@ Strategy:
 Markets: London, NYC, Seoul (original bot cities)
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from strategy_framework import BaseStrategy
 from datetime import datetime, timedelta
 import logging
