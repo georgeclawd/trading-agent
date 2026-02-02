@@ -221,14 +221,21 @@ class LongshotWeatherStrategy(BaseStrategy):
         
         logger.info("  LongshotWeather: Dynamically discovering liquid weather markets...")
         
-        # Weather series on Kalshi (markets have status='active', not 'open')
-        weather_series = ['KXHIGHNY', 'KXHIGHCHI', 'KXHIGHLAX', 'KXHIGHPHIL', 'KXLOWTCHI', 'KXLOWTPHIL']
+        # Fetch ALL climate/weather series dynamically
+        try:
+            response = self.client._request("GET", "/series")
+            all_series = response.json().get('series', [])
+            climate_series = [s['ticker'] for s in all_series if 'Climate' in s.get('category', '') or 'Weather' in s.get('category', '')]
+            logger.info(f"  LongshotWeather: Found {len(climate_series)} climate/weather series")
+        except Exception as e:
+            logger.error(f"  LongshotWeather: Error fetching series list: {e}")
+            climate_series = []
         
         # Get markets by series (not by status filter)
         all_weather_markets = []
-        for series in weather_series:
+        for series in climate_series[:50]:  # Limit to 50 series for performance
             try:
-                response = self.client._request("GET", f"/markets?series_ticker={series}&limit=50")
+                response = self.client._request("GET", f"/markets?series_ticker={series}&limit=20")
                 markets = response.json().get('markets', [])
                 all_weather_markets.extend(markets)
             except Exception as e:
