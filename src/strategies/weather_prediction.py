@@ -45,14 +45,23 @@ class WeatherPredictionStrategy(BaseStrategy):
             
             if position_size > 0:
                 ticker = opp.get('ticker')
-                market_price = int(opp.get('market_price', 50) * 100)  # Convert to cents
+                
+                # Handle market_price - could be decimal (0.50) or already cents (50)
+                raw_price = opp.get('market_price', 50)
+                if raw_price < 1:  # Decimal format (0.50)
+                    market_price = int(raw_price * 100)
+                else:  # Already cents (50)
+                    market_price = int(raw_price)
+                
+                contracts = int(position_size)
+                logger.info(f"WeatherPrediction: Executing {ticker} - size={position_size}, contracts={contracts}, price={market_price}")
                 
                 if self.dry_run:
                     # SIMULATED: Record position without executing
                     self.record_position(
                         ticker=ticker,
                         side='YES',
-                        contracts=int(position_size),
+                        contracts=contracts,
                         entry_price=market_price,
                         market_title=opp.get('market', ''),
                         expected_settlement=opp.get('settlement_time')
@@ -64,13 +73,13 @@ class WeatherPredictionStrategy(BaseStrategy):
                         self.client.create_order(
                             ticker=ticker,
                             side='buy',
-                            contracts=int(position_size),
+                            contracts=contracts,
                             price=market_price
                         )
                         self.record_position(
                             ticker=ticker,
                             side='YES',
-                            contracts=int(position_size),
+                            contracts=contracts,
                             entry_price=market_price,
                             market_title=opp.get('market', '')
                         )
@@ -96,13 +105,17 @@ class WeatherPredictionStrategy(BaseStrategy):
         """Calculate position size based on EV and bankroll"""
         ev = opportunity.get('expected_value', 0)
         
+        logger.debug(f"WeatherPrediction: Calculating position size - EV={ev}, min_ev={self.min_ev}")
+        
         if ev < self.min_ev:
+            logger.debug(f"WeatherPrediction: EV {ev} < min_ev {self.min_ev}, returning 0")
             return 0
         
         # Simple sizing: larger EV = larger position
         max_position = self.config.get('max_position_size', 5)  # $5 max for testing
         size = min(max_position, max(1, ev * 100))  # $1 per 1% EV
         
+        logger.debug(f"WeatherPrediction: Position size calculated: {size}")
         return size
     
     def get_performance(self) -> Dict:
