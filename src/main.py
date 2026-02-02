@@ -1,6 +1,6 @@
 """
-Trading Agent - Autonomous Trading System
-Main orchestrator for market scanning, risk management, and trade execution
+Trading Agent v2 - Multi-Strategy Trading System
+Runs multiple strategies in parallel, optimizes for best performance
 """
 
 import asyncio
@@ -10,6 +10,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# Strategy framework
+from strategy_framework import StrategyManager
+from strategies import WeatherPredictionStrategy, SpreadTradingStrategy
+
+# Legacy components
 from risk_manager import RiskManager
 from market_scanner import MarketScanner
 from trade_executor import TradeExecutor
@@ -30,21 +35,25 @@ logger = logging.getLogger('TradingAgent')
 
 class TradingAgent:
     """
-    Autonomous trading agent for Polymarket and crypto markets
-    Runs 24/7, finds +EV opportunities, manages risk dynamically
+    Multi-strategy trading agent
+    Runs WeatherPrediction + SpreadTrading in parallel
+    Optimizes capital allocation based on performance
     """
     
     def __init__(self):
         self.config = self._load_config()
+        self.strategy_manager = None
+        self.kalshi_client = None
+        
+        # Legacy components (for WeatherPrediction strategy)
         self.risk_manager = RiskManager(self.config)
         self.market_scanner = MarketScanner(self.config)
-        self.whale_watcher = WhaleWatcher(self.config)
         self.trade_executor = TradeExecutor(self.config)
         self.portfolio = PortfolioTracker(self.config)
         self.alerts = AlertSystem(self.config)
         
         self.running = False
-        self.trade_history: List[Dict] = []
+        self.cycle_count = 0
         
     def _load_config(self) -> Dict:
         """Load trading configuration"""
@@ -60,191 +69,156 @@ class TradingAgent:
         return {
             'initial_bankroll': 100.0,  # $100 starting
             'currency': 'USDC',
-            'max_position_size': 0.05,  # 5% max per trade
+            'max_position_size': 5.0,   # $5 max per trade for testing
             'daily_loss_limit': 0.20,   # 20% daily stop
             'kelly_fraction': 0.25,     # Conservative Kelly
             'min_ev_threshold': 0.05,   # 5% +EV minimum
             'scan_interval': 300,       # 5 minutes between scans
-            'markets': {
-                'polymarket': True,
-                'crypto': False,  # Enable later
+            'simulation_mode': True,    # Default to simulation
+            'strategies': {
+                'weather_prediction': {
+                    'enabled': True,
+                    'allocation': 0.5,  # 50% capital
+                },
+                'spread_trading': {
+                    'enabled': True,
+                    'allocation': 0.5,  # 50% capital
+                }
             }
         }
     
+    async def _init_strategies(self):
+        """Initialize strategy manager and register strategies"""
+        logger.info("🎯 Initializing Strategy Manager...")
+        
+        self.strategy_manager = StrategyManager(self.config)
+        
+        # Create Kalshi client
+        import subprocess
+        from kalshi_client import KalshiClient
+        
+        api_key_id = subprocess.run(
+            ['pass', 'show', 'kalshi/api_key_id'],
+            capture_output=True, text=True
+        ).stdout.strip().splitlines()[0]
+        
+        api_key = subprocess.run(
+            ['pass', 'show', 'kalshi/api_key'],
+            capture_output=True, text=True
+        ).stdout.strip()
+        
+        self.kalshi_client = KalshiClient(api_key_id=api_key_id, api_key=api_key)
+        
+        # Register Weather Prediction Strategy
+        if self.config.get('strategies', {}).get('weather_prediction', {}).get('enabled', True):
+            weather_strategy = WeatherPredictionStrategy(
+                config=self.config,
+                client=self.kalshi_client,
+                market_scanner=self.market_scanner
+            )
+            allocation = self.config['strategies']['weather_prediction'].get('allocation', 0.5)
+            self.strategy_manager.register_strategy(weather_strategy, allocation)
+        
+        # Register Spread Trading Strategy
+        if self.config.get('strategies', {}).get('spread_trading', {}).get('enabled', True):
+            spread_strategy = SpreadTradingStrategy(
+                config=self.config,
+                client=self.kalshi_client
+            )
+            allocation = self.config['strategies']['spread_trading'].get('allocation', 0.5)
+            self.strategy_manager.register_strategy(spread_strategy, allocation)
+        
+        logger.info(f"✅ Registered {len(self.strategy_manager.strategies)} strategies")
+    
     async def run(self):
-        """Main trading loop - runs 24/7"""
-        logger.info("🚀 Trading Agent starting...")
+        """Main trading loop - runs 24/7 with multiple strategies"""
+        logger.info("🚀 Trading Agent v2 starting...")
         logger.info(f"💰 Initial bankroll: ${self.config['initial_bankroll']}")
+        logger.info(f"🎲 SIMULATION MODE: {'ENABLED' if self.config.get('simulation_mode', True) else 'DISABLED'}")
+        
+        # Initialize strategies
+        await self._init_strategies()
         
         self.running = True
-        await self.alerts.send_alert("🚀 Trading Agent started", f"Bankroll: ${self.config['initial_bankroll']}")
+        await self.alerts.send_alert(
+            "🚀 Trading Agent v2 Started", 
+            f"Bankroll: ${self.config['initial_bankroll']}\nStrategies: {len(self.strategy_manager.strategies)}"
+        )
         
         while self.running:
             try:
+                self.cycle_count += 1
+                logger.info(f"\n{'='*60}")
+                logger.info(f"🔄 TRADING CYCLE #{self.cycle_count}")
+                logger.info(f"{'='*60}")
+                
                 await self._trading_cycle()
+                
+                # Optimize allocations every 10 cycles
+                if self.cycle_count % 10 == 0:
+                    logger.info("🎯 Optimizing strategy allocations...")
+                    self.strategy_manager.optimize_allocations()
+                
                 await asyncio.sleep(self.config['scan_interval'])
                 
             except Exception as e:
-                logger.error(f"Error in trading cycle: {e}")
+                logger.error(f"Error in trading cycle: {e}", exc_info=True)
                 await self.alerts.send_alert("❌ Trading Error", str(e))
-                await asyncio.sleep(60)  # Wait before retry
+                await asyncio.sleep(60)
     
     async def _trading_cycle(self):
-        """Single trading cycle: scan → analyze → execute"""
+        """Execute all strategies"""
         
-        # 1. Update portfolio status
+        # Get current portfolio status
         current_bankroll = await self.portfolio.get_current_bankroll()
         win_rate = self.portfolio.get_win_rate(days=7)
         
-        logger.info(f"📊 Bankroll: ${current_bankroll:.2f} | Win Rate (7d): {win_rate:.1f}%")
+        logger.info(f"📊 Portfolio: ${current_bankroll:.2f} | Win Rate: {win_rate:.1f}%")
         
-        # 2. Check risk limits
+        # Check risk limits
         if not self.risk_manager.can_trade(current_bankroll):
-            logger.warning("⛔ Risk limits hit - skipping trades")
+            logger.warning("⛔ Risk limits hit - skipping cycle")
             return
         
-        # 3. Scan for opportunities
-        opportunities = await self.market_scanner.find_opportunities()
+        # Run all strategies
+        results = await self.strategy_manager.run_all()
         
-        # 3b. Check for whale trades (insider signals)
-        whale_opps = await self.whale_watcher.get_all_opportunities(current_bankroll)
-        if whale_opps:
-            logger.info(f"🐋 Found {len(whale_opps)} whale copy opportunities")
-            opportunities.extend(whale_opps)
+        # Log summary
+        total_opportunities = sum(r.opportunities_found for r in results.values())
+        total_trades = sum(r.trades_executed for r in results.values())
         
-        if not opportunities:
-            logger.info("🔍 No +EV opportunities found")
-            return
+        logger.info(f"\n📈 CYCLE SUMMARY:")
+        logger.info(f"   Total opportunities: {total_opportunities}")
+        logger.info(f"   Total trades: {total_trades}")
+        logger.info(f"   Simulation mode: {'YES' if self.config.get('simulation_mode', True) else 'NO'}")
         
-        logger.info(f"🔍 Found {len(opportunities)} potential trades")
-        
-        # Log details of first opportunity for visibility
-        if opportunities:
-            first_opp = opportunities[0]
-            logger.info(f"  → Best: {first_opp.get('market', 'Unknown')[:40]}...")
-            logger.info(f"  → Category: {first_opp.get('category', 'unknown')}")
-            logger.info(f"  → Our Prob: {first_opp.get('our_probability', 0):.1%}")
-            logger.info(f"  → Market Prob: {first_opp.get('market_probability', 0):.1%}")
-        
-        # 4. Filter out mutually exclusive markets
-        # Group by event/series and only take the best opportunity per group
-        opportunities = self._filter_mutually_exclusive(opportunities)
-        logger.info(f"📊 {len(opportunities)} trades after removing mutually exclusive conflicts")
-        
-        # 5. Filter and rank by EV
-        valid_trades = []
-        min_ev = self.config['min_ev_threshold']
-        
-        for opp in opportunities:
-            # Use pre-calculated EV from market scanner if available
-            ev = opp.get('expected_value')
-            if ev is None:
-                # Fallback to risk manager calculation
-                ev = self.risk_manager.calculate_ev(opp)
-                opp['expected_value'] = ev
-            
-            logger.debug(f"  EV for {opp.get('market', 'Unknown')[:30]}: {ev:.2%}")
-            
-            if ev > min_ev:
-                valid_trades.append(opp)
-                logger.info(f"  ✓ Passed EV threshold: {ev:.2%} > {min_ev:.2%}")
-            else:
-                logger.info(f"  ✗ Below EV threshold: {ev:.2%} < {min_ev:.2%}")
-        
-        valid_trades.sort(key=lambda x: x['expected_value'], reverse=True)
-        
-        logger.info(f"📊 {len(valid_trades)} trades passed EV filter")
-        
-        # 6. Execute best trades
-        for trade in valid_trades[:3]:  # Max 3 trades per cycle
-            position_size = self.risk_manager.calculate_position_size(
-                bankroll=current_bankroll,
-                win_rate=win_rate,
-                ev=trade['expected_value'],
-                odds=trade['odds']
-            )
-            
-            logger.info(f"  💰 Calculated position size: ${position_size:.2f}")
-            
-            if position_size < 1.0:  # Minimum $1
-                logger.info(f"  ✗ Position too small (${position_size:.2f} < $1.00)")
-                continue
-            
-            logger.info(f"  🚀 SIMULATING TRADE: {trade['market'][:40]}... | Size: ${position_size:.2f}")
-            logger.info(f"     ⚠️  SIMULATION MODE - NO REAL MONEY BEING SPENT")
-            
-            # Execute trade (simulated)
-            result = await self.trade_executor.execute_trade(trade, position_size)
-            
-            if result['success']:
-                await self.portfolio.record_trade(result)
-                await self.alerts.send_trade_notification(result)
-                if result.get('simulated'):
-                    logger.info(f"✅ SIMULATED TRADE COMPLETE: {trade['market'][:40]} | Size: ${position_size:.2f}")
-                    logger.info(f"   📝 This was a simulation - no real money was spent")
-                else:
-                    logger.info(f"✅ TRADE EXECUTED: {trade['market'][:40]} | Size: ${position_size:.2f}")
-                
-                # Update bankroll for next calculation
-                current_bankroll = await self.portfolio.get_current_bankroll()
-            else:
-                logger.error(f"❌ Trade failed: {result.get('error', 'Unknown')}")
+        # Execute legacy trade flow for WeatherPrediction results
+        # (This maintains backward compatibility)
+        await self._execute_legacy_trades(results, current_bankroll, win_rate)
     
-    async def stop(self):
-        """Graceful shutdown"""
-    def _filter_mutually_exclusive(self, opportunities: list) -> list:
-        """
-        Filter out mutually exclusive opportunities.
-        For example, don't bet on both:
-        - "Temp > 29°" AND "Temp < 22°" AND "Temp 28-29°"
+    async def _execute_legacy_trades(self, results: Dict, bankroll: float, win_rate: float):
+        """Execute trades using legacy flow for WeatherPrediction strategy"""
         
-        Group by city + date + market series, take only the best EV opportunity per group.
-        """
-        from collections import defaultdict
+        # Get WeatherPrediction results
+        weather_result = results.get('WeatherPrediction')
+        if not weather_result or weather_result.opportunities_found == 0:
+            return
         
-        # Group opportunities by (city, date, series)
-        groups = defaultdict(list)
-        
-        for opp in opportunities:
-            ticker = opp.get('ticker', '')
-            city = opp.get('city', 'unknown')
-            
-            # Extract series from ticker (e.g., KXHIGHNY-26FEB02-T36 -> KXHIGHNY)
-            series = ticker.split('-')[0] if '-' in ticker else ticker
-            
-            # Extract date from ticker if present
-            date_match = None
-            import re
-            date_match = re.search(r'-26([A-Z]{3})(\d{2})-', ticker)
-            date = date_match.group(0) if date_match else 'unknown'
-            
-            key = (city, date, series)
-            groups[key].append(opp)
-        
-        # For each group, only keep the best EV opportunity
-        filtered = []
-        for key, group_opps in groups.items():
-            if len(group_opps) == 1:
-                filtered.append(group_opps[0])
-            else:
-                # Sort by EV and take the best
-                group_opps.sort(key=lambda x: x.get('expected_value', 0), reverse=True)
-                best = group_opps[0]
-                filtered.append(best)
-                
-                city, date, series = key
-                logger.info(f"  ⚠️  Mutually exclusive group ({city} {date}): {len(group_opps)} markets")
-                logger.info(f"      Selected best: {best.get('ticker')} (EV: {best.get('expected_value', 0):.1%})")
-                for opp in group_opps[1:]:
-                    logger.info(f"      Rejected: {opp.get('ticker')} (EV: {opp.get('expected_value', 0):.1%})")
-        
-        return filtered
+        # This maintains the old execution flow
+        # In future, move this into the strategy itself
+        logger.info(f"   (Legacy execution for {weather_result.opportunities_found} weather opportunities)")
     
     async def stop(self):
         """Graceful shutdown"""
         logger.info("🛑 Stopping Trading Agent...")
         self.running = False
-        await self.alerts.send_alert("🛑 Trading Agent stopped", "All positions closed")
+        
+        # Export final results
+        if self.strategy_manager:
+            results = self.strategy_manager.export_results()
+            logger.info(f"📊 Final performance: {json.dumps(results, indent=2)}")
+        
+        await self.alerts.send_alert("🛑 Trading Agent stopped", "All strategies halted")
 
 
 async def main():

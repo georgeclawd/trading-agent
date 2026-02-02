@@ -45,6 +45,15 @@ discord:
   enabled: true
   webhook: "${DISCORD_WEBHOOK}"
   
+# Strategy Configuration
+strategies:
+  weather_prediction:
+    enabled: true
+    allocation: 0.5          # 50% of capital
+  spread_trading:
+    enabled: true
+    allocation: 0.5          # 50% of capital
+
 # Logging
 log_level: INFO
 save_trades: true
