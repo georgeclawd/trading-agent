@@ -5,8 +5,12 @@ Much easier than Polymarket US (no Ed25519 signatures!)
 
 import requests
 import json
+import time
 from typing import Dict, List, Optional
 from datetime import datetime
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+import base64
 
 
 class KalshiClient:
@@ -17,11 +21,11 @@ class KalshiClient:
     Simple API key authentication (unlike Polymarket's complex signatures)
     """
     
-    BASE_URL = "https://trading-api.kalshi.com/trade-api/v2"
+    BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
     
-    def __init__(self, api_key: str, api_secret: str = None):
+    def __init__(self, api_key_id: str, api_key: str):
+        self.api_key_id = api_key_id
         self.api_key = api_key
-        self.api_secret = api_secret  # May not be needed, Kalshi uses Bearer token
         self.token = None  # Will be set after auth
         
     def authenticate(self) -> bool:
@@ -47,20 +51,56 @@ class KalshiClient:
             print(f"❌ Kalshi auth error: {e}")
             return False
     
+    def _create_signature(self, timestamp: str, method: str, path: str) -> str:
+        """Create RSA signature for Kalshi authentication"""
+        import base64
+        
+        # Message to sign: timestamp + method + path
+        message = f"{timestamp}{method}{path}"
+        
+        # Ensure proper newlines in key
+        key_data = self.api_key
+        if '\\n' in key_data:
+            key_data = key_data.replace('\\n', '\n')
+        
+        # Load private key
+        private_key = serialization.load_pem_private_key(
+            key_data.encode(),
+            password=None
+        )
+        
+        # Sign with RSA-SHA256
+        signature = private_key.sign(
+            message.encode(),
+            padding.PKCS1v15(),
+            hashes.SHA256()
+        )
+        
+        return base64.b64encode(signature).decode()
+    
     def _request(self, method: str, endpoint: str, data: Dict = None) -> requests.Response:
         """Make authenticated request to Kalshi API"""
+        import time
+        
         url = f"{self.BASE_URL}{endpoint}"
+        
+        # Create timestamp (milliseconds)
+        timestamp = str(int(time.time() * 1000))
+        
+        # Create signature
+        try:
+            signature = self._create_signature(timestamp, method, endpoint)
+        except Exception as e:
+            print(f"Signature creation failed: {e}")
+            # Fallback to simple request for public endpoints
+            signature = ""
         
         headers = {
             "Content-Type": "application/json",
+            "KALSHI-ACCESS-KEY": self.api_key_id,
+            "KALSHI-ACCESS-SIGNATURE": signature,
+            "KALSHI-ACCESS-TIMESTAMP": timestamp
         }
-        
-        # Add auth if we have token
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        elif self.api_key:
-            # Try with API key directly
-            headers["Authorization"] = f"Bearer {self.api_key}"
         
         try:
             if method == "GET":
