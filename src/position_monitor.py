@@ -114,6 +114,12 @@ class PositionMonitor:
                                f"waiting for result publication")
                     # Don't close position yet - keep monitoring
                 
+                elif market_data and market_data.get('status') == 'closed':
+                    # Market closed but not yet settled
+                    logger.info(f"⏳ Position closed (settlement pending): {ticker} - "
+                               f"waiting for result publication")
+                    # Don't close position yet - keep monitoring
+                
                 else:
                     # Position gone but can't determine status - assume settled at entry
                     logger.warning(f"⚠️ Position disappeared from Kalshi: {ticker} - "
