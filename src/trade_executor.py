@@ -4,7 +4,7 @@ Handles wallet, signatures, and order placement
 """
 
 import asyncio
-from typing import Dict
+from typing import Dict, Optional
 from dataclasses import dataclass
 
 
