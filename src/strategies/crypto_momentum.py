@@ -221,45 +221,38 @@ class CryptoMomentumStrategy(BaseStrategy):
         
         logger.debug("CryptoMomentum: Fetching BTC price...")
         
-        # Coinbase
-        try:
-            async with asyncio.timeout(10):
-                async with session.get(
-                    'https://api.coinbase.com/v2/exchange-rates?currency=BTC'
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        usd_price = float(data['data']['rates']['USD'])
-                        prices.append(usd_price)
-                        logger.debug(f"CryptoMomentum: Coinbase price = ${usd_price:,.2f}")
-        except asyncio.TimeoutError:
-            logger.warning("CryptoMomentum: Coinbase price fetch TIMEOUT")
-        except Exception as e:
-            logger.debug(f"CryptoMomentum: Coinbase price fetch failed: {e}")
+        # Try multiple sources with 5s timeout each
+        sources = [
+            ('CoinGecko', 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd', 
+             lambda d: d['bitcoin']['usd']),
+            ('Coinbase', 'https://api.coinbase.com/v2/exchange-rates?currency=BTC',
+             lambda d: float(d['data']['rates']['USD'])),
+            ('Binance', 'https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT',
+             lambda d: float(d['price'])),
+        ]
         
-        # CoinGecko (backup)
-        if not prices:
+        for name, url, extractor in sources:
+            if prices:
+                break  # Already have a price
             try:
-                async with asyncio.timeout(10):
-                    async with session.get(
-                        'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'
-                    ) as resp:
+                async with asyncio.timeout(5):
+                    async with session.get(url) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            price = data['bitcoin']['usd']
+                            price = extractor(data)
                             prices.append(price)
-                            logger.debug(f"CryptoMomentum: CoinGecko price = ${price:,.2f}")
+                            logger.info(f"CryptoMomentum: {name} price = ${price:,.2f}")
             except asyncio.TimeoutError:
-                logger.warning("CryptoMomentum: CoinGecko price fetch TIMEOUT")
+                logger.warning(f"CryptoMomentum: {name} TIMEOUT")
             except Exception as e:
-                logger.debug(f"CryptoMomentum: CoinGecko price fetch failed: {e}")
+                logger.debug(f"CryptoMomentum: {name} failed: {e}")
         
         if not prices:
-            logger.warning("CryptoMomentum: ALL price sources failed")
+            logger.error("CryptoMomentum: ALL price sources failed")
             return None
         
         avg_price = sum(prices) / len(prices)
-        logger.debug(f"CryptoMomentum: Average BTC price = ${avg_price:,.2f}")
+        logger.info(f"CryptoMomentum: BTC price = ${avg_price:,.2f}")
         return avg_price
     
     # ==================== EXACT PORTS FROM JS ====================
