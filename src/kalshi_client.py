@@ -126,13 +126,16 @@ class KalshiClient:
             
             if response.status_code == 200:
                 data = response.json()
-                return data.get("markets", [])
+                markets = data.get("markets", [])
+                print(f"[Kalshi] Retrieved {len(markets)} markets (status={status})")
+                return markets
             else:
-                print(f"Error fetching markets: {response.status_code}")
+                print(f"[Kalshi] Error fetching markets: {response.status_code}")
+                print(f"[Kalshi] Response: {response.text[:200]}")
                 return []
                 
         except Exception as e:
-            print(f"Error getting markets: {e}")
+            print(f"[Kalshi] Error getting markets: {e}")
             return []
     
     def get_market(self, market_id: str) -> Optional[Dict]:

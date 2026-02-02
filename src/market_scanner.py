@@ -50,6 +50,10 @@ class MarketScanner:
         """Scan all markets for +EV opportunities"""
         opportunities = []
         
+        # Ensure session exists
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+        
         logger.info("🔍 STARTING MARKET SCAN")
         logger.info("="*60)
         
@@ -59,9 +63,15 @@ class MarketScanner:
         opportunities.extend(weather_opps)
         
         # Kalshi markets
-        logger.info("🏦 Scanning Kalshi for matching weather markets...")
+        logger.info("🏦 Scanning Kalshi for opportunities...")
         kalshi_opps, kalshi_details = await self._scan_kalshi()
         opportunities.extend(kalshi_opps)
+        
+        # If no weather markets, scan sports/finance for other opportunities
+        if kalshi_details.get('weather_markets_found', 0) == 0:
+            logger.info("   📝 No weather markets found, checking sports/finance...")
+            other_opps = await self._scan_kalshi_other_markets()
+            opportunities.extend(other_opps)
         
         # Log summary
         logger.info("="*60)
@@ -74,7 +84,11 @@ class MarketScanner:
         if opportunities:
             logger.info(f"   Best EV: {opportunities[0].get('expected_value', 0):.2%}")
         else:
-            logger.info(f"   Reason: No markets met +EV threshold ({self.config.get('min_ev_threshold', 0.05):.1%})")
+            if kalshi_details.get('weather_markets_found', 0) == 0:
+                logger.info(f"   Reason: No weather markets available on Kalshi right now")
+                logger.info(f"   Note: Weather markets are seasonal. Try again during storm/winter season.")
+            else:
+                logger.info(f"   Reason: Found markets but none met +EV threshold ({self.config.get('min_ev_threshold', 0.05):.1%})")
         logger.info("="*60)
         
         # Sort by expected value
@@ -325,8 +339,9 @@ class MarketScanner:
     
     async def _fetch_weather(self, lat: float, lon: float) -> Optional[Dict]:
         """Fetch weather forecast from Open-Meteo"""
+        # Create session if not exists
         if not self.session:
-            return None
+            self.session = aiohttp.ClientSession()
         
         try:
             url = (
@@ -339,8 +354,10 @@ class MarketScanner:
             async with self.session.get(url, timeout=10) as response:
                 if response.status == 200:
                     return await response.json()
+                else:
+                    logger.error(f"Weather API returned {response.status}")
         except Exception as e:
-            print(f"Weather fetch error: {e}")
+            logger.error(f"Weather fetch error: {e}")
         
         return None
     
@@ -423,9 +440,54 @@ class MarketScanner:
         
         return True
     
+    async def _scan_kalshi_other_markets(self) -> List[Dict]:
+        """Scan sports/finance markets on Kalshi for value"""
+        opportunities = []
+        
+        try:
+            from kalshi_client import KalshiClient
+            import subprocess
+            
+            api_key_id = subprocess.run(['pass', 'show', 'kalshi/api_key_id'], 
+                                       capture_output=True, text=True).stdout.strip().split('\n')[0]
+            api_key = subprocess.run(['pass', 'show', 'kalshi/api_key'], 
+                                    capture_output=True, text=True).stdout.strip()
+            
+            client = KalshiClient(api_key_id=api_key_id, api_key=api_key)
+            
+            # Get finance markets (more predictable than sports)
+            logger.info("   💰 Checking finance markets...")
+            markets = client.get_markets(limit=50, status='open')
+            
+            finance_keywords = ['spx', 'nasdaq', 'bitcoin', 'btc', 'eth', 'fed', 'rate']
+            
+            for m in markets:
+                title = m.get('title', '').lower()
+                ticker = m.get('ticker', '')
+                
+                # Look for finance markets we might have an edge on
+                if any(k in title for k in finance_keywords):
+                    last_price = m.get('last_price', 50)
+                    volume = m.get('volume', 0)
+                    
+                    # Log what we find
+                    logger.info(f"      📈 {ticker[:40]}...")
+                    logger.info(f"         Price: {last_price}¢ | Volume: ${volume:,.0f}")
+                    logger.info(f"         Title: {title[:50]}...")
+                    
+                    # For now just log - would need external data source for +EV calc
+                    # opportunities.append({...})
+                    
+            logger.info(f"   📊 Checked {len(markets)} markets, found {len(opportunities)} opportunities")
+            
+        except Exception as e:
+            logger.error(f"   Error scanning other markets: {e}")
+        
+        return opportunities
+    
     async def _scan_sports_markets(self) -> List[Dict]:
         """Scan sports betting markets"""
-        # TODO: Integrate with sports APIs
+        # TODO: Integrate with sports APIs (would need odds APIs like Odds API)
         return []
     
     async def _scan_crypto_markets(self) -> List[Dict]:
