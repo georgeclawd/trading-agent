@@ -221,25 +221,27 @@ class LongshotWeatherStrategy(BaseStrategy):
         
         logger.info("  LongshotWeather: Dynamically discovering liquid weather markets...")
         
-        # Get all markets
-        try:
-            markets = self.client.get_markets(limit=1000, status='open')
-        except Exception as e:
-            logger.error(f"  LongshotWeather: Error fetching markets: {e}")
-            return opportunities
+        # Weather series on Kalshi (markets have status='active', not 'open')
+        weather_series = ['KXHIGHNY', 'KXHIGHCHI', 'KXHIGHLAX', 'KXHIGHPHIL', 'KXLOWTCHI', 'KXLOWTPHIL']
+        
+        # Get markets by series (not by status filter)
+        all_weather_markets = []
+        for series in weather_series:
+            try:
+                response = self.client._request("GET", f"/markets?series_ticker={series}&limit=50")
+                markets = response.json().get('markets', [])
+                all_weather_markets.extend(markets)
+            except Exception as e:
+                logger.debug(f"  LongshotWeather: Error fetching {series}: {e}")
+                continue
+        
+        logger.info(f"  LongshotWeather: Found {len(all_weather_markets)} total weather markets from series")
         
         # First pass: Find weather markets with ACTUAL LIQUIDITY
         liquid_weather = []
-        for m in markets:
+        for m in all_weather_markets:
             title = m.get('title', '')
-            title_lower = title.lower()
             ticker = m.get('ticker', '')
-            
-            # Check if it's a weather market
-            is_weather = any(k in title_lower for k in ['temp', 'temperature', 'high', 'low', 'rain', 'snow'])
-            
-            if not is_weather:
-                continue
             
             # Check for liquidity (this is the key filter)
             try:
@@ -276,7 +278,6 @@ class LongshotWeatherStrategy(BaseStrategy):
                     logger.debug(f"  LongshotWeather: Error on {ticker[:30]}: {str(e)[:50]}")
                 continue
         
-        logger.info(f"  LongshotWeather: Checked {len([m for m in markets if any(k in m.get('title','').lower() for k in ['temp', 'temperature', 'high', 'low', 'rain', 'snow'])])} weather markets")
         logger.info(f"  LongshotWeather: Found {len(liquid_weather)} weather markets WITH LIQUIDITY")
         
         # Second pass: Filter for cheap markets and extract cities
