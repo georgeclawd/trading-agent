@@ -15,8 +15,8 @@ class WeatherPredictionStrategy(BaseStrategy):
     Predicts weather outcomes and trades when EV > threshold
     """
     
-    def __init__(self, config: Dict, client, market_scanner):
-        super().__init__(config, client)
+    def __init__(self, config: Dict, client, market_scanner, position_manager=None):
+        super().__init__(config, client, position_manager)
         self.scanner = market_scanner
         self.min_ev = config.get('min_ev_threshold', 0.05)
         self.name = "WeatherPrediction"
@@ -36,7 +36,7 @@ class WeatherPredictionStrategy(BaseStrategy):
         return weather_opps
     
     async def execute(self, opportunities: List[Dict]) -> int:
-        """Execute trades on opportunities"""
+        """Execute trades on opportunities (real or simulated)"""
         executed = 0
         
         for opp in opportunities:
@@ -44,17 +44,51 @@ class WeatherPredictionStrategy(BaseStrategy):
             position_size = self._calculate_position_size(opp)
             
             if position_size > 0:
-                # Simulate trade (replace with actual execution)
+                ticker = opp.get('ticker')
+                market_price = int(opp.get('market_price', 50) * 100)  # Convert to cents
+                
+                if self.dry_run:
+                    # SIMULATED: Record position without executing
+                    self.record_position(
+                        ticker=ticker,
+                        side='YES',
+                        contracts=int(position_size),
+                        entry_price=market_price,
+                        market_title=opp.get('market', ''),
+                        expected_settlement=opp.get('settlement_time')
+                    )
+                    logger.info(f"    [SIMULATED] ✓ Would execute: {ticker} (EV: {opp.get('expected_value'):.1%})")
+                else:
+                    # REAL: Execute via Kalshi API
+                    try:
+                        self.client.create_order(
+                            ticker=ticker,
+                            side='buy',
+                            contracts=int(position_size),
+                            price=market_price
+                        )
+                        self.record_position(
+                            ticker=ticker,
+                            side='YES',
+                            contracts=int(position_size),
+                            entry_price=market_price,
+                            market_title=opp.get('market', '')
+                        )
+                        logger.info(f"    [REAL] ✓ Executed: {ticker} (EV: {opp.get('expected_value'):.1%})")
+                    except Exception as e:
+                        logger.error(f"    [REAL] ✗ Failed to execute {ticker}: {e}")
+                        continue
+                
+                # Record for performance tracking
                 trade = {
-                    'ticker': opp.get('ticker'),
+                    'ticker': ticker,
                     'market': opp.get('market'),
                     'size': position_size,
                     'expected_value': opp.get('expected_value'),
-                    'simulated': True
+                    'simulated': self.dry_run
                 }
                 self.record_trade(trade)
                 executed += 1
-                logger.info(f"    ✓ Executed: {opp.get('ticker')} (EV: {opp.get('expected_value'):.1%})")
         
         return executed
     

@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 # Strategy framework
 from strategy_framework import StrategyManager
 from strategies import WeatherPredictionStrategy, SpreadTradingStrategy, CryptoMomentumStrategy, LongshotWeatherStrategy
+from position_manager import PositionManager
 
 # Legacy components
 from risk_manager import RiskManager
@@ -44,6 +45,7 @@ class TradingAgent:
         self.config = self._load_config()
         self.strategy_manager = None
         self.kalshi_client = None
+        self.position_manager = None
         
         # Legacy components (for WeatherPrediction strategy)
         self.risk_manager = RiskManager(self.config)
@@ -78,11 +80,23 @@ class TradingAgent:
             'strategies': {
                 'weather_prediction': {
                     'enabled': True,
-                    'allocation': 0.5,  # 50% capital
+                    'allocation': 0.25,
+                    'dry_run': True,     # Simulated trading
                 },
                 'spread_trading': {
                     'enabled': True,
-                    'allocation': 0.5,  # 50% capital
+                    'allocation': 0.25,
+                    'dry_run': True,     # Simulated trading
+                },
+                'crypto_momentum': {
+                    'enabled': True,
+                    'allocation': 0.25,
+                    'dry_run': False,    # REAL MONEY - Crypto trades live
+                },
+                'longshot_weather': {
+                    'enabled': True,
+                    'allocation': 0.25,
+                    'dry_run': True,     # Simulated trading
                 }
             }
         }
@@ -92,6 +106,9 @@ class TradingAgent:
         logger.info("🎯 Initializing Strategy Manager...")
         
         self.strategy_manager = StrategyManager(self.config)
+        
+        # Initialize Position Manager for tracking all positions
+        self.position_manager = PositionManager()
         
         # Create Kalshi client
         import subprocess
@@ -109,45 +126,59 @@ class TradingAgent:
         
         self.kalshi_client = KalshiClient(api_key_id=api_key_id, api_key=api_key)
         
-        # Register Weather Prediction Strategy
-        if self.config.get('strategies', {}).get('weather_prediction', {}).get('enabled', True):
+        # Register Weather Prediction Strategy (DRY RUN)
+        weather_cfg = self.config.get('strategies', {}).get('weather_prediction', {})
+        if weather_cfg.get('enabled', True):
             weather_strategy = WeatherPredictionStrategy(
-                config=self.config,
+                config={**self.config, 'dry_run': weather_cfg.get('dry_run', True)},
                 client=self.kalshi_client,
-                market_scanner=self.market_scanner
+                market_scanner=self.market_scanner,
+                position_manager=self.position_manager
             )
-            allocation = self.config['strategies']['weather_prediction'].get('allocation', 0.5)
+            allocation = weather_cfg.get('allocation', 0.25)
             self.strategy_manager.register_strategy(weather_strategy, allocation)
         
-        # Register Spread Trading Strategy
-        if self.config.get('strategies', {}).get('spread_trading', {}).get('enabled', True):
+        # Register Spread Trading Strategy (DRY RUN)
+        spread_cfg = self.config.get('strategies', {}).get('spread_trading', {})
+        if spread_cfg.get('enabled', True):
             spread_strategy = SpreadTradingStrategy(
-                config=self.config,
-                client=self.kalshi_client
+                config={**self.config, 'dry_run': spread_cfg.get('dry_run', True)},
+                client=self.kalshi_client,
+                position_manager=self.position_manager
             )
-            allocation = self.config['strategies']['spread_trading'].get('allocation', 0.33)
+            allocation = spread_cfg.get('allocation', 0.25)
             self.strategy_manager.register_strategy(spread_strategy, allocation)
         
-        # Register Crypto Momentum Strategy
-        if self.config.get('strategies', {}).get('crypto_momentum', {}).get('enabled', True):
+        # Register Crypto Momentum Strategy (REAL MONEY!)
+        crypto_cfg = self.config.get('strategies', {}).get('crypto_momentum', {})
+        if crypto_cfg.get('enabled', True):
             crypto_strategy = CryptoMomentumStrategy(
-                config=self.config,
-                client=self.kalshi_client
+                config={**self.config, 'dry_run': crypto_cfg.get('dry_run', False)},
+                client=self.kalshi_client,
+                position_manager=self.position_manager
             )
-            allocation = self.config['strategies']['crypto_momentum'].get('allocation', 0.25)
+            allocation = crypto_cfg.get('allocation', 0.25)
             self.strategy_manager.register_strategy(crypto_strategy, allocation)
         
-        # Register Longshot Weather Strategy ($64K bot algorithm)
-        if self.config.get('strategies', {}).get('longshot_weather', {}).get('enabled', True):
+        # Register Longshot Weather Strategy ($64K bot algorithm) (DRY RUN)
+        longshot_cfg = self.config.get('strategies', {}).get('longshot_weather', {})
+        if longshot_cfg.get('enabled', True):
             longshot_strategy = LongshotWeatherStrategy(
-                config=self.config,
+                config={**self.config, 'dry_run': longshot_cfg.get('dry_run', True)},
                 client=self.kalshi_client,
-                market_scanner=self.market_scanner
+                market_scanner=self.market_scanner,
+                position_manager=self.position_manager
             )
-            allocation = self.config['strategies']['longshot_weather'].get('allocation', 0.25)
+            allocation = longshot_cfg.get('allocation', 0.25)
             self.strategy_manager.register_strategy(longshot_strategy, allocation)
         
         logger.info(f"✅ Registered {len(self.strategy_manager.strategies)} strategies")
+        
+        # Print weekly competition header
+        logger.info("🏆 WEEKLY COMPETITION MODE")
+        logger.info("   CryptoMomentum: REAL MONEY")
+        logger.info("   All others: SIMULATED (dry run)")
+        logger.info("   Winner determined by real + hypothetical P&L")
     
     async def _price_fetcher_loop(self):
         """

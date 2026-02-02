@@ -27,12 +27,20 @@ class StrategyResult:
 class BaseStrategy(ABC):
     """Base class for all trading strategies"""
     
-    def __init__(self, config: Dict, client):
+    def __init__(self, config: Dict, client, position_manager=None):
         self.config = config
         self.client = client
+        self.position_manager = position_manager
         self.name = self.__class__.__name__
         self.trades = []
         self.errors = []
+        
+        # Trading mode
+        self.dry_run = config.get('dry_run', True)  # Default to safe mode
+        if self.dry_run:
+            logger.info(f"{self.name}: Running in DRY RUN mode (simulated trading)")
+        else:
+            logger.warning(f"{self.name}: Running in LIVE mode (real money!)")
     
     @abstractmethod
     async def scan(self) -> List[Dict]:
@@ -63,6 +71,43 @@ class BaseStrategy(ABC):
             'error': error,
             'timestamp': datetime.now().isoformat()
         })
+    
+    def record_position(self, ticker: str, side: str, contracts: int, 
+                       entry_price: float, market_title: str = '', 
+                       expected_settlement: str = None):
+        """
+        Record a position via PositionManager
+        Handles both real and simulated (dry-run) positions
+        """
+        if self.position_manager:
+            return self.position_manager.open_position(
+                ticker=ticker,
+                side=side,
+                contracts=contracts,
+                entry_price=entry_price,
+                strategy=self.name,
+                simulated=self.dry_run,
+                market_title=market_title,
+                expected_settlement=expected_settlement
+            )
+        else:
+            logger.warning(f"{self.name}: No position manager configured")
+            return None
+    
+    def close_position(self, ticker: str, exit_price: float, pnl: float):
+        """
+        Close a position via PositionManager
+        """
+        if self.position_manager:
+            return self.position_manager.close_position(
+                ticker=ticker,
+                exit_price=exit_price,
+                pnl=pnl,
+                simulated=self.dry_run
+            )
+        else:
+            logger.warning(f"{self.name}: No position manager configured")
+            return None
 
 
 class StrategyManager:

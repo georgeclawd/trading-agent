@@ -30,8 +30,8 @@ class CryptoMomentumStrategy(BaseStrategy):
     Scores direction, applies time awareness, computes edge, decides trade
     """
     
-    def __init__(self, config: Dict, client):
-        super().__init__(config, client)
+    def __init__(self, config: Dict, client, position_manager=None):
+        super().__init__(config, client, position_manager)
         self.name = "CryptoMomentum"
         
         # Market series
@@ -660,29 +660,51 @@ class CryptoMomentumStrategy(BaseStrategy):
             limit_price = int(opp['fair_probability'] * 100)  # Convert to cents
             limit_price = max(1, min(99, limit_price))  # Clamp to valid range
             
-            logger.info(f"CryptoMomentum: EXECUTING - {ticker} {opp['side']} x{contracts} @ {limit_price}c (edge={edge:.2%})")
-            
-            try:
-                self.client.create_order(
+            if self.dry_run:
+                # SIMULATED: Record position without executing
+                self.record_position(
                     ticker=ticker,
-                    side='buy',
+                    side=opp['side'],
                     contracts=contracts,
-                    price=limit_price
+                    entry_price=limit_price,
+                    market_title=opp['market']
                 )
-                logger.info(f"CryptoMomentum: Executed {ticker}")
+                logger.info(f"CryptoMomentum: [SIMULATED] Would execute {ticker} {opp['side']} x{contracts} @ {limit_price}c (edge={edge:.2%})")
                 executed_count += 1
+            else:
+                # REAL: Execute via Kalshi API
+                logger.info(f"CryptoMomentum: [REAL] EXECUTING - {ticker} {opp['side']} x{contracts} @ {limit_price}c (edge={edge:.2f}%})")
                 
-                # Record trade for performance tracking
-                self.record_trade({
-                    'ticker': ticker,
-                    'side': opp['side'],
-                    'contracts': contracts,
-                    'price': limit_price,
-                    'edge': edge,
-                    'pnl': 0  # Will be updated on settlement
-                })
-            except Exception as e:
-                logger.error(f"CryptoMomentum: Failed to execute {ticker}: {e}")
-                self.record_error(f"Execute {ticker}: {e}")
+                try:
+                    self.client.create_order(
+                        ticker=ticker,
+                        side='buy',
+                        contracts=contracts,
+                        price=limit_price
+                    )
+                    logger.info(f"CryptoMomentum: [REAL] Executed {ticker}")
+                    executed_count += 1
+                    
+                    # Record position for tracking
+                    self.record_position(
+                        ticker=ticker,
+                        side=opp['side'],
+                        contracts=contracts,
+                        entry_price=limit_price,
+                        market_title=opp['market']
+                    )
+                    
+                    # Record trade for performance tracking
+                    self.record_trade({
+                        'ticker': ticker,
+                        'side': opp['side'],
+                        'contracts': contracts,
+                        'price': limit_price,
+                        'edge': edge,
+                        'pnl': 0  # Will be updated on settlement
+                    })
+                except Exception as e:
+                    logger.error(f"CryptoMomentum: [REAL] Failed to execute {ticker}: {e}")
+                    self.record_error(f"Execute {ticker}: {e}")
         
         return executed_count

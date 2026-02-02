@@ -32,8 +32,8 @@ class LongshotWeatherStrategy(BaseStrategy):
     - Targets longshots with high ROI potential
     """
     
-    def __init__(self, config: Dict, client, market_scanner=None):
-        super().__init__(config, client)
+    def __init__(self, config: Dict, client, market_scanner=None, position_manager=None):
+        super().__init__(config, client, position_manager)
         self.name = "LongshotWeather"
         self.market_scanner = market_scanner
         
@@ -435,14 +435,51 @@ class LongshotWeatherStrategy(BaseStrategy):
         return opportunities
     
     async def execute(self, opportunities: List[Dict]) -> int:
-        """Execute longshot trades"""
+        """Execute longshot trades (real or simulated)"""
         executed = 0
         
         logger.info(f"  LongshotWeather: Execute called with {len(opportunities)} opportunities")
         
         for opp in opportunities:
+            ticker = opp['ticker']
+            market_price_cents = int(opp['market_price'] * 100)
+            
+            if self.dry_run:
+                # SIMULATED: Record position without executing
+                self.record_position(
+                    ticker=ticker,
+                    side='YES',
+                    contracts=min(self.max_position, 5),
+                    entry_price=market_price_cents,
+                    market_title=opp['market']
+                )
+                logger.info(f"    [SIMULATED] ✓ Would execute: {ticker[:30]}... "
+                           f"at {opp['market_price']:.1%}, edge={opp['expected_value']:.1%}")
+            else:
+                # REAL: Execute via Kalshi API
+                try:
+                    self.client.create_order(
+                        ticker=ticker,
+                        side='buy',
+                        contracts=min(self.max_position, 5),
+                        price=market_price_cents
+                    )
+                    self.record_position(
+                        ticker=ticker,
+                        side='YES',
+                        contracts=min(self.max_position, 5),
+                        entry_price=market_price_cents,
+                        market_title=opp['market']
+                    )
+                    logger.info(f"    [REAL] ✓ Executed: {ticker[:30]}... "
+                               f"at {opp['market_price']:.1%}, edge={opp['expected_value']:.1%}")
+                except Exception as e:
+                    logger.error(f"    [REAL] ✗ Failed to execute {ticker}: {e}")
+                    continue
+            
+            # Track for performance
             trade = {
-                'ticker': opp['ticker'],
+                'ticker': ticker,
                 'market': opp['market'],
                 'city': opp['city'],
                 'market_price': opp['market_price'],
@@ -451,14 +488,10 @@ class LongshotWeatherStrategy(BaseStrategy):
                 'size': min(self.max_position, 5),
                 'timestamp': datetime.now().isoformat(),
                 'status': 'open',
-                'simulated': True
+                'simulated': self.dry_run
             }
-            
             self.record_trade(trade)
             executed += 1
-            
-            logger.info(f"    ✓ Executed: {opp['ticker'][:30]}... "
-                       f"at {opp['market_price']:.1%}, edge={opp['expected_value']:.1%}")
         
         return executed
     

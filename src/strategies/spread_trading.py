@@ -23,8 +23,8 @@ class SpreadTradingStrategy(BaseStrategy):
     - Works on ALL 8,225+ series, not just weather
     """
     
-    def __init__(self, config: Dict, client):
-        super().__init__(config, client)
+    def __init__(self, config: Dict, client, position_manager=None):
+        super().__init__(config, client, position_manager)
         self.name = "SpreadTrading"
         self.min_spread = 0.02  # Minimum 2% spread
         self.max_position = config.get('max_position_size', 5)
@@ -115,30 +115,60 @@ class SpreadTradingStrategy(BaseStrategy):
         }
     
     async def execute(self, opportunities: List[Dict]) -> int:
-        """Execute spread trades"""
+        """Execute spread trades (real or simulated)"""
         executed = 0
         
         for opp in opportunities:
-            # Place limit order at entry price
+            ticker = opp['ticker']
+            entry_price = int(opp['entry_price'] * 100)  # Convert to cents
+            
+            if self.dry_run:
+                # SIMULATED: Record position without executing
+                self.record_position(
+                    ticker=ticker,
+                    side='YES',
+                    contracts=min(self.max_position, 5),
+                    entry_price=entry_price,
+                    market_title=opp['market']
+                )
+                logger.info(f"    [SIMULATED] ✓ Would place limit: {ticker} at {opp['entry_price']:.1%}")
+            else:
+                # REAL: Place limit order via Kalshi API
+                try:
+                    self.client.create_order(
+                        ticker=ticker,
+                        side='buy',
+                        contracts=min(self.max_position, 5),
+                        price=entry_price
+                    )
+                    self.record_position(
+                        ticker=ticker,
+                        side='YES',
+                        contracts=min(self.max_position, 5),
+                        entry_price=entry_price,
+                        market_title=opp['market']
+                    )
+                    logger.info(f"    [REAL] ✓ Placed limit: {ticker} at {opp['entry_price']:.1%}")
+                except Exception as e:
+                    logger.error(f"    [REAL] ✗ Failed to place limit {ticker}: {e}")
+                    continue
+            
+            # Track for monitoring
             trade = {
-                'ticker': opp['ticker'],
+                'ticker': ticker,
                 'market': opp['market'],
                 'side': opp['side'],
                 'entry': opp['entry_price'],
                 'target': opp['target_price'],
-                'size': min(self.max_position, 5),  # $5 max for testing
+                'size': min(self.max_position, 5),
                 'expected_profit': opp['expected_profit'],
                 'timestamp': datetime.now().isoformat(),
                 'status': 'open',
-                'simulated': True
+                'simulated': self.dry_run
             }
-            
             self.record_trade(trade)
-            self.active_orders[opp['ticker']] = trade
+            self.active_orders[ticker] = trade
             executed += 1
-            
-            logger.info(f"    ✓ Placed limit: {opp['ticker']} at {opp['entry_price']:.1%} "
-                  f"(target: {opp['target_price']:.1%}, spread: {opp['spread']:.1%})")
         
         return executed
     
