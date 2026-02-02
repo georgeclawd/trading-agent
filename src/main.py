@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 
 # Strategy framework
 from strategy_framework import StrategyManager
-from strategies import WeatherPredictionStrategy, SpreadTradingStrategy, CryptoMomentumStrategy
+from strategies import WeatherPredictionStrategy, SpreadTradingStrategy, CryptoMomentumStrategy, LongshotWeatherStrategy
 
 # Legacy components
 from risk_manager import RiskManager
@@ -134,8 +134,18 @@ class TradingAgent:
                 config=self.config,
                 client=self.kalshi_client
             )
-            allocation = self.config['strategies']['crypto_momentum'].get('allocation', 0.33)
+            allocation = self.config['strategies']['crypto_momentum'].get('allocation', 0.25)
             self.strategy_manager.register_strategy(crypto_strategy, allocation)
+        
+        # Register Longshot Weather Strategy ($64K bot algorithm)
+        if self.config.get('strategies', {}).get('longshot_weather', {}).get('enabled', True):
+            longshot_strategy = LongshotWeatherStrategy(
+                config=self.config,
+                client=self.kalshi_client,
+                market_scanner=self.market_scanner
+            )
+            allocation = self.config['strategies']['longshot_weather'].get('allocation', 0.25)
+            self.strategy_manager.register_strategy(longshot_strategy, allocation)
         
         logger.info(f"✅ Registered {len(self.strategy_manager.strategies)} strategies")
     

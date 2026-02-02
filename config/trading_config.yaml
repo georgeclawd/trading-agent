@@ -49,13 +49,16 @@ discord:
 strategies:
   weather_prediction:
     enabled: true
-    allocation: 0.33         # 33% of capital
+    allocation: 0.25         # 25% of capital
   spread_trading:
     enabled: true
-    allocation: 0.33         # 33% of capital
+    allocation: 0.25         # 25% of capital
   crypto_momentum:
     enabled: true
-    allocation: 0.34         # 34% of capital
+    allocation: 0.25         # 25% of capital
+  longshot_weather:
+    enabled: true
+    allocation: 0.25         # 25% of capital - $64K bot algorithm
 
 # Logging
 log_level: INFO
