@@ -136,11 +136,16 @@ class TradingAgent:
         min_ev = self.config['min_ev_threshold']
         
         for opp in opportunities:
-            ev = self.risk_manager.calculate_ev(opp)
-            logger.debug(f"  Calculating EV for {opp.get('market', 'Unknown')[:30]}: {ev:.2%}")
+            # Use pre-calculated EV from market scanner if available
+            ev = opp.get('expected_value')
+            if ev is None:
+                # Fallback to risk manager calculation
+                ev = self.risk_manager.calculate_ev(opp)
+                opp['expected_value'] = ev
+            
+            logger.debug(f"  EV for {opp.get('market', 'Unknown')[:30]}: {ev:.2%}")
             
             if ev > min_ev:
-                opp['expected_value'] = ev
                 valid_trades.append(opp)
                 logger.info(f"  ✓ Passed EV threshold: {ev:.2%} > {min_ev:.2%}")
             else:
