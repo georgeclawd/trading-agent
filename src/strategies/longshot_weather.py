@@ -365,11 +365,11 @@ class LongshotWeatherStrategy(BaseStrategy):
                 continue
             
             # Get forecast for relevant date
-            # Try to extract date from ticker
-            date_match = re.search(r'-(\d{2})([A-Z]{3})(\d{2})-', ticker)
+            # Try to extract date from ticker (format: YY-MMM-DD, e.g., 26FEB03)
+            date_match = re.search(r'-([A-Z]{3})(\d{2})-', ticker)
             if date_match:
-                day = date_match.group(1)
-                month_str = date_match.group(2)
+                month_str = date_match.group(1)
+                day = date_match.group(2)
                 months = {'JAN': 1, 'FEB': 2, 'MAR': 3}
                 month = months.get(month_str, 2)
                 
