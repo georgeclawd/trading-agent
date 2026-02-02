@@ -241,7 +241,6 @@ class CryptoMomentumStrategy(BaseStrategy):
                             data = await resp.json()
                             price = extractor(data)
                             prices.append(price)
-                            logger.info(f"CryptoMomentum: {name} price = ${price:,.2f}")
                         elif resp.status == 429:
                             logger.warning(f"CryptoMomentum: {name} RATE LIMITED (429)")
                         else:
@@ -256,7 +255,8 @@ class CryptoMomentumStrategy(BaseStrategy):
             return None
         
         avg_price = sum(prices) / len(prices)
-        logger.info(f"CryptoMomentum: BTC price = ${avg_price:,.2f}")
+        source_name = sources[len(prices)-1][0]  # Get name of successful source
+        logger.info(f"CryptoMomentum: BTC price = ${avg_price:,.2f} (via {source_name})")
         return avg_price
     
     # ==================== EXACT PORTS FROM JS ====================
