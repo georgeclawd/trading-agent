@@ -369,7 +369,13 @@ class LongshotWeatherStrategy(BaseStrategy):
                 forecast_date = f"2026-{month:02d}-{int(day):02d}"
                 daily_forecast = forecast.get(forecast_date)
                 
+                # DEBUG: Log forecast lookup
+                if len(opportunities) < 3 and daily_forecast:
+                    logger.info(f"  LongshotWeather: DEBUG {ticker[:20]}... date={forecast_date}, forecast={daily_forecast}")
+                
                 if not daily_forecast:
+                    if len(opportunities) < 3:
+                        logger.info(f"  LongshotWeather: DEBUG No forecast for {forecast_date}, have={list(forecast.keys())[:3]}")
                     continue
                 
                 # Calculate fair probability with deviation
