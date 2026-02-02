@@ -313,6 +313,9 @@ class LongshotWeatherStrategy(BaseStrategy):
         # Log discovered markets for visibility
         if cheap_markets:
             logger.info(f"  LongshotWeather: Discovered liquid markets in: {', '.join(set(m['city'] for m in cheap_markets))}")
+            # Log first few cheap markets
+            for m in cheap_markets[:3]:
+                logger.info(f"  LongshotWeather: Cheap market - {m['ticker'][:30]} {m['side']}={m['market_price']:.1%}")
         
         # Analyze each cheap market
         
@@ -390,11 +393,14 @@ class LongshotWeatherStrategy(BaseStrategy):
                 # Calculate edge using $64K formula
                 edge = self.calculate_edge(fair_prob, market_price)
                 
-                logger.info(f"  LongshotWeather: {ticker[:25]}... "
-                           f"Market={market_price:.1%}, Fair={fair_prob:.1%}, Edge={edge:.1%}")
+                # Log every market analysis
+                logger.info(f"  LongshotWeather: {ticker[:30]}... "
+                           f"{item['side']}={market_price:.1%}, Fair={fair_prob:.1%}, "
+                           f"Edge={edge:.1%} (need >{self.min_edge:.1%})")
                 
                 # Only trade if edge > threshold (cheap markets need bigger edge)
                 if edge > self.min_edge:
+                    logger.info(f"  LongshotWeather: ✅ EDGE PASSED - {edge:.1%} > {self.min_edge:.1%}")
                     opp = {
                         'ticker': ticker,
                         'market': title,
@@ -418,6 +424,8 @@ class LongshotWeatherStrategy(BaseStrategy):
     async def execute(self, opportunities: List[Dict]) -> int:
         """Execute longshot trades"""
         executed = 0
+        
+        logger.info(f"  LongshotWeather: Execute called with {len(opportunities)} opportunities")
         
         for opp in opportunities:
             trade = {
