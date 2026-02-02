@@ -140,6 +140,14 @@ class TradingAgent:
         
         self.kalshi_client = KalshiClient(api_key_id=api_key_id, api_key=api_key)
         
+        # Authenticate with Kalshi
+        logger.info("🔐 Authenticating with Kalshi...")
+        auth_success = self.kalshi_client.authenticate()
+        if not auth_success:
+            logger.error("❌ Kalshi authentication failed!")
+            raise Exception("Failed to authenticate with Kalshi")
+        logger.info("✅ Kalshi authentication successful")
+        
         # Register Weather Prediction Strategy (DRY RUN)
         weather_cfg = self.config.get('strategies', {}).get('weather_prediction', {})
         if weather_cfg.get('enabled', True):

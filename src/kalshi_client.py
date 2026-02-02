@@ -200,6 +200,10 @@ class KalshiClient:
         try:
             response = self._request("POST", "/orders", data)
             
+            # Log raw response for debugging
+            print(f"[Kalshi] Response status: {response.status_code}")
+            print(f"[Kalshi] Response text: {response.text[:200]}")
+            
             if response.status_code == 200:
                 result = response.json()
                 print(f"✅ Order placed: {result.get('order_id')}")
@@ -212,11 +216,16 @@ class KalshiClient:
                     "count": count
                 }
             else:
-                error_msg = response.json().get("error", "Unknown error")
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("error", "Unknown error")
+                except:
+                    error_msg = response.text[:100] or f"HTTP {response.status_code}"
                 print(f"❌ Order failed: {error_msg}")
                 return {
                     "success": False,
-                    "error": error_msg
+                    "error": error_msg,
+                    "status_code": response.status_code
                 }
                 
         except Exception as e:
