@@ -158,21 +158,19 @@ class TradingAgent:
         
         while self.running:
             try:
-                # Fetch BTC price
-                price = await crypto_strategy.fetch_btc_price()
-                if price:
-                    # Add to strategy's price history
-                    crypto_strategy.add_price_point(price)
-                    
-                    # Log progress periodically
-                    candles = len(crypto_strategy.price_history)
-                    if candles < 20:
-                        if candles % 5 == 0 or candles == 1:
-                            logger.info(f"📊 BTC Price History: {candles}/20 candles")
+                # Fetch 1m candles (this updates the price history)
+                candles = await crypto_strategy.fetch_1m_candles()
+                
+                # Log progress periodically
+                if candles:
+                    num_candles = len(candles)
+                    if num_candles < 30:
+                        if num_candles % 5 == 0 or num_candles <= 5:
+                            logger.info(f"📊 BTC 1m Candles: {num_candles}/30")
                     else:
                         # Show indicator preview when ready
-                        if candles == 20:
-                            logger.info("✅ BTC Price History complete! Indicators ready")
+                        if num_candles == 30:
+                            logger.info("✅ BTC 1m Candles complete! Indicators ready")
                 
                 # Wait 60 seconds
                 await asyncio.sleep(60)
