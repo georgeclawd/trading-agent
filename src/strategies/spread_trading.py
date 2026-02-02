@@ -54,9 +54,11 @@ class SpreadTradingStrategy(BaseStrategy):
             
             # Get orderbook
             try:
-                orderbook = self.client.get_orderbook(ticker)
-                if not orderbook:
+                orderbook_response = self.client.get_orderbook(ticker)
+                if not orderbook_response:
                     continue
+                # Kalshi returns {'orderbook': {'yes': [...], 'no': [...]}}
+                orderbook = orderbook_response.get('orderbook', {})
             except Exception as e:
                 logger.debug(f"  SpreadTrading: Error fetching orderbook for {ticker}: {e}")
                 continue
@@ -74,14 +76,18 @@ class SpreadTradingStrategy(BaseStrategy):
         """Analyze orderbook for spread opportunity"""
         
         yes_bids = orderbook.get('yes', [])
-        yes_asks = orderbook.get('no', [])
+        no_bids = orderbook.get('no', [])
         
-        if not yes_bids or not yes_asks:
+        if not yes_bids or not no_bids:
             return None
         
-        # Get best prices
-        best_bid = yes_bids[0].get('price', 0) / 100 if yes_bids else 0
-        best_ask = 100 - yes_asks[0].get('price', 100) / 100 if yes_asks else 1.0
+        # Get best prices - Kalshi format: [[price_cents, volume], ...]
+        if isinstance(yes_bids[0], list):
+            best_bid = yes_bids[0][0] / 100  # First element is price in cents
+            best_ask = (100 - no_bids[0][0]) / 100  # NO price converted to YES price
+        else:
+            best_bid = yes_bids[0].get('price', 0) / 100
+            best_ask = 100 - no_bids[0].get('price', 100) / 100
         
         # Calculate spread
         spread = best_ask - best_bid
@@ -143,13 +149,17 @@ class SpreadTradingStrategy(BaseStrategy):
                 continue
             
             # Get current orderbook
-            orderbook = self.client.get_orderbook(ticker)
-            if not orderbook:
+            orderbook_response = self.client.get_orderbook(ticker)
+            if not orderbook_response:
                 continue
             
+            orderbook = orderbook_response.get('orderbook', {})
             yes_bids = orderbook.get('yes', [])
             if yes_bids:
-                current_bid = yes_bids[0].get('price', 0) / 100
+                if isinstance(yes_bids[0], list):
+                    current_bid = yes_bids[0][0] / 100
+                else:
+                    current_bid = yes_bids[0].get('price', 0) / 100
                 
                 # Exit if price reached target
                 if current_bid >= position['target']:

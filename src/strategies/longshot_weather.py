@@ -243,13 +243,19 @@ class LongshotWeatherStrategy(BaseStrategy):
             
             # Check for liquidity (this is the key filter)
             try:
-                orderbook = self.client.get_orderbook(ticker)
+                orderbook_response = self.client.get_orderbook(ticker)
+                # Kalshi returns {'orderbook': {'yes': [...], 'no': [...]}}
+                orderbook = orderbook_response.get('orderbook', {})
                 yes_bids = orderbook.get('yes', [])
                 no_bids = orderbook.get('no', [])
                 
                 if yes_bids and no_bids:
-                    yes_price = yes_bids[0].get('price', 100) / 100
-                    no_price = no_bids[0].get('price', 100) / 100
+                    # Prices are in format [[price_cents, volume], ...]
+                    yes_price_cents = yes_bids[0][0] if isinstance(yes_bids[0], list) else yes_bids[0].get('price', 100)
+                    no_price_cents = no_bids[0][0] if isinstance(no_bids[0], list) else no_bids[0].get('price', 100)
+                    
+                    yes_price = yes_price_cents / 100
+                    no_price = no_price_cents / 100
                     
                     # Only keep markets with actual prices
                     liquid_weather.append({
