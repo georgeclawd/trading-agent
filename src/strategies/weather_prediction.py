@@ -65,21 +65,21 @@ class WeatherPredictionStrategy(BaseStrategy):
             logger.info(f"WeatherPrediction: Executing {ticker} - size={position_size}, contracts={contracts}, price={market_price}")
             
             if self.dry_run:
-                    # SIMULATED: Record position without executing
-                    recorded = self.record_position(
-                        ticker=ticker,
-                        side='YES',
-                        contracts=contracts,
-                        entry_price=market_price,
-                        market_title=opp.get('market', ''),
-                        expected_settlement=opp.get('settlement_time')
-                    )
-                    if recorded:
-                        logger.info(f"    [SIMULATED] ✓ Would execute: {ticker} (EV: {opp.get('expected_value'):.1%})")
-                    else:
-                        logger.debug(f"    [SIMULATED] Skipping {ticker} - already have open position")
-                        continue
+                # SIMULATED: Record position without executing
+                recorded = self.record_position(
+                    ticker=ticker,
+                    side='YES',
+                    contracts=contracts,
+                    entry_price=market_price,
+                    market_title=opp.get('market', ''),
+                    expected_settlement=opp.get('settlement_time')
+                )
+                if recorded:
+                    logger.info(f"    [SIMULATED] ✓ Would execute: {ticker} (EV: {opp.get('expected_value'):.1%})")
                 else:
+                    logger.debug(f"    [SIMULATED] Skipping {ticker} - already have open position")
+                    continue
+            else:
                     # REAL: Execute via Kalshi API
                     try:
                         result = self.client.place_order(
