@@ -121,7 +121,7 @@ class WeatherPredictionStrategy(BaseStrategy):
         max_position = self.config.get('max_position_size', 5)
         size = int(min(max_position, max(1, ev_percent)))
         
-        logger.info(f"WeatherPrediction: SIZING - EV={ev:.4f}, ev_percent={ev_percent:.2f}, size={size}")
+        logger.info(f"WeatherPrediction: SIZING - EV={ev:.4f}, ev_percent={ev_percent:.2f}, max_pos={max_position}, size={size}")
         return size
     
     def get_performance(self) -> Dict:
