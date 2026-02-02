@@ -84,12 +84,20 @@ class MarketScanner:
         if opportunities:
             logger.info(f"   Best EV: {opportunities[0].get('expected_value', 0):.2%}")
         else:
-            if kalshi_details.get('weather_markets_found', 0) == 0 and kalshi_details.get('climate_markets_found', 0) == 0:
-                logger.info(f"   Reason: No weather/climate markets available on Kalshi right now")
-                logger.info(f"   Note: Weather markets are seasonal/event-based and appear during storms/winter.")
-                logger.info(f"   Currently available: Sports ({kalshi_details.get('sports_count', 0)}), Finance ({kalshi_details.get('finance_count', 0)})")
+            total_markets = (kalshi_details.get('sports_count', 0) + 
+                           kalshi_details.get('finance_count', 0) + 
+                           kalshi_details.get('entertainment_count', 0))
+            
+            if kalshi_details.get('weather_markets_found', 0) == 0:
+                logger.info(f"   Reason: No city-specific weather markets found for our monitored cities")
+                logger.info(f"   Available on Kalshi: {total_markets} total markets")
+                logger.info(f"     - Sports: ~{kalshi_details.get('sports_count', 0)}")
+                logger.info(f"     - Finance: ~{kalshi_details.get('finance_count', 0)}")
+                logger.info(f"     - Entertainment: ~{kalshi_details.get('entertainment_count', 0)}")
+                if kalshi_details.get('climate_markets_found', 0) > 0:
+                    logger.info(f"     - Climate/Weather (general): {kalshi_details.get('climate_markets_found', 0)}")
             else:
-                logger.info(f"   Reason: Found markets but none met +EV threshold ({self.config.get('min_ev_threshold', 0.05):.1%})")
+                logger.info(f"   Reason: Found {kalshi_details.get('weather_markets_found', 0)} weather markets but none met +EV threshold")
         logger.info("="*60)
         
         # Sort by expected value
@@ -109,6 +117,7 @@ class MarketScanner:
             'climate_markets_found': 0,
             'sports_count': 0,
             'finance_count': 0,
+            'entertainment_count': 0,
             'markets_with_data': 0,
             'rejected_low_ev': 0,
             'rejected_no_data': 0,
@@ -131,10 +140,26 @@ class MarketScanner:
             cities = ['new york', 'nyc', 'los angeles', 'la', 'chicago', 'london', 'tokyo']
             details['cities_checked'] = len(cities)
             
-            # Get open markets (status='active' returns 400 on new API)
+            # Get open markets - fetch ALL to get accurate counts
             logger.info("   📥 Fetching open markets from Kalshi...")
-            markets = client.get_markets(limit=100, status='open')
+            markets = client.get_markets(limit=1000, status='open')
             logger.info(f"   📊 Retrieved {len(markets)} active markets")
+            
+            # Also check for event-based markets (like Grammys)
+            logger.info("   📅 Checking event-based markets...")
+            try:
+                # Check specific events we know about
+                event_tickers = ['KXGRAMAOTY-68', 'KXMVESPORTSMULTIGAMEEXTENDED']
+                for event_ticker in event_tickers:
+                    event_response = client._request("GET", f"/events/{event_ticker}")
+                    if event_response and event_response.status_code == 200:
+                        event_data = event_response.json()
+                        event_markets = event_data.get('markets', [])
+                        logger.info(f"      ✅ Found event {event_ticker}: {len(event_markets)} markets")
+                        # Add these markets to our list
+                        markets.extend(event_markets)
+            except Exception as e:
+                logger.warning(f"   Event check warning: {e}")
             
             # Filter for weather markets
             weather_keywords = ['rain', 'temperature', 'snow', 'weather']
@@ -142,18 +167,25 @@ class MarketScanner:
             
             for market in markets:
                 title = market.get('title', '').lower()
+                ticker = market.get('ticker', '').lower()
+                combined = title + ' ' + ticker
                 
-                # Count by category for reporting
-                if any(k in title for k in ['nba', 'nfl', 'soccer', 'game', 'score', 'points', 'yards', 'player']):
-                    details['sports_count'] += 1
-                elif any(k in title for k in ['spx', 'nasdaq', 'bitcoin', 'eth', 'rate', 'fed', 'price']):
+                # Count by category for reporting (more accurate detection)
+                # Check entertainment FIRST (more specific patterns)
+                if any(k in combined for k in ['grammy', 'album of the', 'oscar', 'emmy', 'academy award', 'golden globe']):
+                    details['entertainment_count'] += 1
+                # Finance (specific financial terms)
+                elif any(k in combined for k in ['spx', 'nasdaq', 'bitcoin', 'btc', 'eth', 'rate', 'fed', 'cpi', 'inflation', 's&p', 'index', 'price']):
                     details['finance_count'] += 1
+                # Sports (game-related)
+                elif any(k in combined for k in ['nba', 'nfl', 'nhl', 'mlb', 'soccer', 'points', 'yards', 'goals', 'scored', 'win by', 'over', 'under']) or ' yes ' in combined:
+                    details['sports_count'] += 1
                 
                 # Check for climate markets
-                if any(word in title for word in ['temperature', 'climate', 'degrees', 'celsius', 'fahrenheit', 'heat']):
+                if any(word in combined for word in ['temperature', 'climate', 'degrees', 'celsius', 'fahrenheit', 'heat', 'rain', 'snow', 'weather', 'storm']):
                     details['climate_markets_found'] += 1
                 
-                # Check for weather markets
+                # Check for weather markets (specific to our cities)
                 if any(word in title for word in weather_keywords):
                     # Check if it's for one of our monitored cities
                     if any(city in title for city in cities):
