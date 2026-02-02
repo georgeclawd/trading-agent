@@ -636,10 +636,13 @@ class CryptoMomentumStrategy(BaseStrategy):
             'candles_collected': len(self.candles_1m)
         }
     
-    async def execute(self, opportunities: List[Dict]):
+    async def execute(self, opportunities: List[Dict]) -> int:
         """
         Execute trades based on opportunities
+        Returns: number of trades executed
         """
+        executed_count = 0
+        
         for opp in opportunities:
             ticker = opp['ticker']
             edge = opp['edge']
@@ -667,5 +670,19 @@ class CryptoMomentumStrategy(BaseStrategy):
                     price=limit_price
                 )
                 logger.info(f"CryptoMomentum: Executed {ticker}")
+                executed_count += 1
+                
+                # Record trade for performance tracking
+                self.record_trade({
+                    'ticker': ticker,
+                    'side': opp['side'],
+                    'contracts': contracts,
+                    'price': limit_price,
+                    'edge': edge,
+                    'pnl': 0  # Will be updated on settlement
+                })
             except Exception as e:
                 logger.error(f"CryptoMomentum: Failed to execute {ticker}: {e}")
+                self.record_error(f"Execute {ticker}: {e}")
+        
+        return executed_count
