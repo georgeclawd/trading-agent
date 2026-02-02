@@ -479,7 +479,7 @@ class MarketScanner:
             'category': 'weather',
             'subcategory': 'temperature' if is_temp_market else 'rain',
             'city': city_name,
-            'temp_forecast': tomorrow_max if is_temp_market else None,
+            'temp_forecast': forecast_max if is_temp_market else None,
             'temp_threshold': market_threshold,
             'market_type': market_type,
             'price_source': price_source,
