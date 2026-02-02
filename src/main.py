@@ -140,9 +140,12 @@ class TradingAgent:
         
         self.kalshi_client = KalshiClient(api_key_id=api_key_id, api_key=api_key)
         
-        # Note: Authentication happens automatically on each request via signatures
-        # No explicit authenticate() call needed - each _request() signs the call
-        logger.info("🔐 Kalshi client initialized (auth on each request)")
+        # Test connection to verify API keys work
+        logger.info("🔐 Testing Kalshi connection...")
+        if not self.kalshi_client.test_connection():
+            logger.error("❌ Kalshi connection failed - check API keys")
+            raise Exception("Kalshi API connection failed")
+        logger.info("✅ Kalshi connected successfully")
         
         # Register Weather Prediction Strategy (DRY RUN)
         weather_cfg = self.config.get('strategies', {}).get('weather_prediction', {})

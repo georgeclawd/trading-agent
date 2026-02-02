@@ -1,24 +1,26 @@
 """
-Kalshi API Integration - Simple REST API client
-Much easier than Polymarket US (no Ed25519 signatures!)
+Kalshi API Integration - Simplified REST API client
+Based on Kalshi Trade API v2 documentation
 """
 
 import requests
 import json
 import time
+import base64
 from typing import Dict, List, Optional
 from datetime import datetime
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
-import base64
 
 
 class KalshiClient:
     """
     Kalshi Exchange API Client
     
-    Kalshi is CFTC regulated, fully legal in US
-    Simple API key authentication (unlike Polymarket's complex signatures)
+    Authentication: RSA-SHA256 signatures
+    - KALSHI-ACCESS-KEY: Your API key ID
+    - KALSHI-ACCESS-SIGNATURE: RSA-SHA256 signature
+    - KALSHI-ACCESS-TIMESTAMP: Unix timestamp in milliseconds
     """
     
     BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
@@ -26,74 +28,64 @@ class KalshiClient:
     def __init__(self, api_key_id: str, api_key: str):
         self.api_key_id = api_key_id
         self.api_key = api_key
-        self.token = None  # Will be set after auth
+        self._session = requests.Session()
         
-    def authenticate(self) -> bool:
-        """
-        Authenticate with Kalshi API
-        
-        Kalshi uses API keys with Bearer token auth (much simpler!)
-        """
-        try:
-            # Test auth by fetching user data
-            response = self._request("GET", "/exchange/user")
-            
-            if response.status_code == 200:
-                self.token = self.api_key  # Kalshi uses API key as Bearer token
-                print("✅ Kalshi authentication successful")
-                return True
-            else:
-                print(f"❌ Kalshi auth failed: {response.status_code}")
-                print(response.text)
-                return False
-                
-        except Exception as e:
-            print(f"❌ Kalshi auth error: {e}")
-            return False
-    
     def _create_signature(self, timestamp: str, method: str, path: str) -> str:
-        """Create RSA signature for Kalshi authentication"""
-        import base64
+        """Create RSA signature for Kalshi authentication
         
+        Message format: timestamp + method + path (no spaces, no base URL)
+        Example: 1706886000000GET/markets
+        """
         # Message to sign: timestamp + method + path
-        message = f"{timestamp}{method}{path}"
+        # Ensure path starts with /
+        if not path.startswith('/'):
+            path = '/' + path
+        message = f"{timestamp}{method.upper()}{path}"
         
-        # Ensure proper newlines in key
+        # Clean up key format
         key_data = self.api_key
         if '\\n' in key_data:
             key_data = key_data.replace('\\n', '\n')
         
-        # Load private key
-        private_key = serialization.load_pem_private_key(
-            key_data.encode(),
-            password=None
-        )
+        # Fix PEM format - needs newlines every 64 characters
+        if '-----BEGIN' in key_data and '\n' not in key_data:
+            # Key is all on one line, needs reformatting
+            start = key_data.find('-----BEGIN RSA PRIVATE KEY-----') + len('-----BEGIN RSA PRIVATE KEY-----')
+            end = key_data.find('-----END RSA PRIVATE KEY-----')
+            if start > 0 and end > start:
+                base64_content = key_data[start:end]
+                lines = [base64_content[i:i+64] for i in range(0, len(base64_content), 64)]
+                key_data = '-----BEGIN RSA PRIVATE KEY-----\n' + '\n'.join(lines) + '\n-----END RSA PRIVATE KEY-----'
         
-        # Sign with RSA-SHA256
-        signature = private_key.sign(
-            message.encode(),
-            padding.PKCS1v15(),
-            hashes.SHA256()
-        )
-        
-        return base64.b64encode(signature).decode()
+        try:
+            # Load private key
+            private_key = serialization.load_pem_private_key(
+                key_data.encode(),
+                password=None
+            )
+            
+            # Sign with RSA-SHA256 using PKCS1v15 padding
+            signature = private_key.sign(
+                message.encode(),
+                padding.PKCS1v15(),
+                hashes.SHA256()
+            )
+            
+            return base64.b64encode(signature).decode()
+        except Exception as e:
+            print(f"[Kalshi] Signature creation failed: {e}")
+            raise
     
-    def _request(self, method: str, endpoint: str, data: Dict = None) -> requests.Response:
+    def _make_request(self, method: str, endpoint: str, data: Dict = None) -> requests.Response:
         """Make authenticated request to Kalshi API"""
-        import time
-        
         url = f"{self.BASE_URL}{endpoint}"
-        
-        # Create timestamp (milliseconds)
         timestamp = str(int(time.time() * 1000))
         
-        # Create signature
         try:
             signature = self._create_signature(timestamp, method, endpoint)
         except Exception as e:
-            print(f"Signature creation failed: {e}")
-            # Fallback to simple request for public endpoints
-            signature = ""
+            print(f"[Kalshi] Failed to create signature: {e}")
+            raise
         
         headers = {
             "Content-Type": "application/json",
@@ -102,74 +94,51 @@ class KalshiClient:
             "KALSHI-ACCESS-TIMESTAMP": timestamp
         }
         
-        try:
-            if method == "GET":
-                return requests.get(url, headers=headers, timeout=30)
-            elif method == "POST":
-                return requests.post(url, headers=headers, json=data, timeout=30)
-            elif method == "DELETE":
-                return requests.delete(url, headers=headers, timeout=30)
-            else:
-                raise ValueError(f"Unsupported method: {method}")
-        except Exception as e:
-            print(f"Request error: {e}")
-            raise
+        if method == "GET":
+            return self._session.get(url, headers=headers, timeout=30)
+        elif method == "POST":
+            return self._session.post(url, headers=headers, json=data, timeout=30)
+        elif method == "DELETE":
+            return self._session.delete(url, headers=headers, timeout=30)
+        else:
+            raise ValueError(f"Unsupported method: {method}")
     
-    def get_markets(self, status: str = "open", limit: int = 100) -> List[Dict]:
-        """
-        Get list of available markets
-        
-        Categories: weather, crypto, sports, politics, economics
-        """
+    def test_connection(self) -> bool:
+        """Test API connection by fetching markets"""
         try:
-            response = self._request("GET", f"/markets?status={status}&limit={limit}")
-            
+            response = self._make_request("GET", "/markets?limit=1")
+            print(f"[Kalshi] Test connection: {response.status_code}")
             if response.status_code == 200:
                 data = response.json()
-                markets = data.get("markets", [])
-                print(f"[Kalshi] Retrieved {len(markets)} markets (status={status})")
-                return markets
+                print(f"[Kalshi] Connected! Found {len(data.get('markets', []))} markets")
+                return True
             else:
-                print(f"[Kalshi] Error fetching markets: {response.status_code}")
-                print(f"[Kalshi] Response: {response.text[:200]}")
-                return []
-                
+                print(f"[Kalshi] Connection failed: {response.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"[Kalshi] Connection error: {e}")
+            return False
+    
+    def get_markets(self, status: str = "open", limit: int = 100) -> List[Dict]:
+        """Get list of available markets"""
+        try:
+            response = self._make_request("GET", f"/markets?status={status}&limit={limit}")
+            if response.status_code == 200:
+                return response.json().get("markets", [])
+            return []
         except Exception as e:
             print(f"[Kalshi] Error getting markets: {e}")
             return []
     
-    def get_market(self, market_id: str) -> Optional[Dict]:
-        """Get specific market details"""
-        try:
-            response = self._request("GET", f"/markets/{market_id}")
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                print(f"Error fetching market {market_id}: {response.status_code}")
-                return None
-                
-        except Exception as e:
-            print(f"Error getting market: {e}")
-            return None
-    
     def get_orderbook(self, market_id: str) -> Optional[Dict]:
-        """
-        Get orderbook for a market
-        
-        Returns bids (NO) and asks (YES) with prices
-        """
+        """Get orderbook for a market"""
         try:
-            response = self._request("GET", f"/markets/{market_id}/orderbook")
-            
+            response = self._make_request("GET", f"/markets/{market_id}/orderbook")
             if response.status_code == 200:
                 return response.json()
-            else:
-                print(f"Error fetching orderbook: {response.status_code}")
-                return None
-                
+            return None
         except Exception as e:
-            print(f"Error getting orderbook: {e}")
+            print(f"[Kalshi] Error getting orderbook: {e}")
             return None
     
     def place_order(self, market_id: str, side: str, price: float, 
@@ -178,48 +147,31 @@ class KalshiClient:
         Place an order on Kalshi
         
         Args:
-            market_id: Market ticker (e.g., "WEATH-NYC-20250202-RAIN")
+            market_id: Market ticker
             side: "yes" or "no"
-            price: Price in cents (0-100)
+            price: Price in cents (1-99)
             count: Number of contracts
-            expiration_ts: Unix timestamp for order expiration (optional)
-        
-        Returns:
-            Order result with order_id
         """
         data = {
             "ticker": market_id,
-            "side": side,
-            "price": price,
-            "count": count,
+            "side": side.lower(),
+            "price": int(price),
+            "count": int(count)
         }
         
         if expiration_ts:
             data["expiration_ts"] = expiration_ts
         
         try:
-            # Try different endpoints - Kalshi API changed recently
-            endpoints_to_try = ["/portfolio/orders", "/orders"]
-            response = None
+            # Try the correct endpoint
+            response = self._make_request("POST", "/portfolio/orders", data)
             
-            for endpoint in endpoints_to_try:
-                try:
-                    response = self._request("POST", endpoint, data)
-                    if response.status_code != 404:
-                        break  # Found working endpoint
-                except:
-                    continue
-            
-            if response is None:
-                return {"success": False, "error": "All order endpoints failed"}
-            
-            # Log raw response for debugging
-            print(f"[Kalshi] Response status: {response.status_code}")
-            print(f"[Kalshi] Response text: {response.text[:200]}")
+            print(f"[Kalshi] Order response: {response.status_code}")
+            if response.text:
+                print(f"[Kalshi] Response body: {response.text[:300]}")
             
             if response.status_code == 200:
                 result = response.json()
-                print(f"✅ Order placed: {result.get('order_id')}")
                 return {
                     "success": True,
                     "order_id": result.get("order_id"),
@@ -229,128 +181,34 @@ class KalshiClient:
                     "count": count
                 }
             else:
-                try:
-                    error_data = response.json()
-                    error_msg = error_data.get("error", "Unknown error")
-                except:
-                    error_msg = response.text[:100] or f"HTTP {response.status_code}"
-                print(f"❌ Order failed: {error_msg}")
                 return {
                     "success": False,
-                    "error": error_msg,
+                    "error": response.text[:200] if response.text else f"HTTP {response.status_code}",
                     "status_code": response.status_code
                 }
                 
         except Exception as e:
-            print(f"❌ Order error: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    def cancel_order(self, order_id: str) -> bool:
-        """Cancel an open order"""
-        try:
-            response = self._request("DELETE", f"/orders/{order_id}")
-            return response.status_code == 200
-        except Exception as e:
-            print(f"Cancel error: {e}")
-            return False
+            print(f"[Kalshi] Order error: {e}")
+            return {"success": False, "error": str(e)}
     
     def get_positions(self) -> List[Dict]:
         """Get current portfolio positions"""
         try:
-            response = self._request("GET", "/portfolio/positions")
-            
+            response = self._make_request("GET", "/portfolio/positions")
             if response.status_code == 200:
-                data = response.json()
-                return data.get("positions", [])
-            else:
-                print(f"Error fetching positions: {response.status_code}")
-                return []
-                
+                return response.json().get("positions", [])
+            return []
         except Exception as e:
-            print(f"Error getting positions: {e}")
+            print(f"[Kalshi] Error getting positions: {e}")
             return []
     
-    def get_balance(self) -> Dict:
+    def get_balance(self) -> Optional[Dict]:
         """Get account balance"""
         try:
-            response = self._request("GET", "/portfolio/balance")
-            
+            response = self._make_request("GET", "/portfolio/balance")
             if response.status_code == 200:
                 return response.json()
-            else:
-                print(f"Error fetching balance: {response.status_code}")
-                return {}
-                
+            return None
         except Exception as e:
-            print(f"Error getting balance: {e}")
-            return {}
-    
-    def get_orders(self, status: str = "open") -> List[Dict]:
-        """Get open orders"""
-        try:
-            response = self._request("GET", f"/orders?status={status}")
-            
-            if response.status_code == 200:
-                data = response.json()
-                return data.get("orders", [])
-            else:
-                return []
-                
-        except Exception as e:
-            print(f"Error getting orders: {e}")
-            return []
-
-
-class KalshiMarketFinder:
-    """Helper to find matching markets between Kalshi and Polymarket"""
-    
-    def __init__(self, kalshi_client: KalshiClient):
-        self.kalshi = kalshi_client
-        self.market_cache = {}
-    
-    def search_weather_markets(self, city: str = None) -> List[Dict]:
-        """Find weather prediction markets"""
-        markets = self.kalshi.get_markets(status="open")
-        
-        weather_markets = []
-        for market in markets:
-            ticker = market.get("ticker", "")
-            title = market.get("title", "").lower()
-            
-            # Filter for weather markets
-            if "rain" in title or "temp" in title or "weather" in title:
-                if city and city.lower() in title:
-                    weather_markets.append(market)
-                elif not city:
-                    weather_markets.append(market)
-        
-        return weather_markets
-    
-    def search_crypto_markets(self, symbol: str = None) -> List[Dict]:
-        """Find crypto price markets"""
-        markets = self.kalshi.get_markets(status="open")
-        
-        crypto_markets = []
-        for market in markets:
-            ticker = market.get("ticker", "")
-            title = market.get("title", "").lower()
-            
-            if symbol and symbol.lower() in title:
-                crypto_markets.append(market)
-            elif any(x in title for x in ["bitcoin", "btc", "eth", "ethereum"]):
-                crypto_markets.append(market)
-        
-        return crypto_markets
-    
-    def find_matching_market(self, polymarket_event: str) -> Optional[Dict]:
-        """
-        Find a Kalshi market matching a Polymarket event
-        
-        This is the key function for cross-platform arbitrage
-        """
-        # TODO: Implement semantic matching
-        # Normalize both event texts and compare
-        return None
+            print(f"[Kalshi] Error getting balance: {e}")
+            return None
