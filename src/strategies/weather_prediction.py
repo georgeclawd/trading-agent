@@ -5,6 +5,9 @@ Original strategy: Predict weather, calculate EV, trade if edge exists
 
 from typing import Dict, List
 from strategy_framework import BaseStrategy
+import logging
+
+logger = logging.getLogger('WeatherPrediction')
 
 
 class WeatherPredictionStrategy(BaseStrategy):
@@ -29,7 +32,7 @@ class WeatherPredictionStrategy(BaseStrategy):
             if opp.get('category') == 'weather' and opp.get('expected_value', 0) > self.min_ev
         ]
         
-        print(f"  WeatherPrediction: Found {len(weather_opps)} opportunities")
+        logger.info(f"  WeatherPrediction: Found {len(weather_opps)} opportunities")
         return weather_opps
     
     async def execute(self, opportunities: List[Dict]) -> int:
@@ -51,7 +54,7 @@ class WeatherPredictionStrategy(BaseStrategy):
                 }
                 self.record_trade(trade)
                 executed += 1
-                print(f"    ✓ Executed: {opp.get('ticker')} (EV: {opp.get('expected_value'):.1%})")
+                logger.info(f"    ✓ Executed: {opp.get('ticker')} (EV: {opp.get('expected_value'):.1%})")
         
         return executed
     

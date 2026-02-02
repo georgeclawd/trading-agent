@@ -6,6 +6,9 @@ Trades bid/ask spreads on any market with orderbook
 from typing import Dict, List, Optional
 from strategy_framework import BaseStrategy
 from datetime import datetime
+import logging
+
+logger = logging.getLogger('SpreadTrading')
 
 
 class SpreadTradingStrategy(BaseStrategy):
@@ -32,32 +35,39 @@ class SpreadTradingStrategy(BaseStrategy):
         opportunities = []
         
         # Get ALL markets (not just weather)
-        print("  SpreadTrading: Scanning all Kalshi markets...")
+        logger.info("  SpreadTrading: Scanning all Kalshi markets...")
         markets = self.client.get_markets(limit=1000, status='open')
         
         # Filter for markets with sufficient volume
-        liquid_markets = [m for m in markets if m.get('volume', 0) > 500]
+        liquid_markets = [m for m in markets if m.get('volume', 0) > 200]
         
-        print(f"  SpreadTrading: Found {len(liquid_markets)} liquid markets")
+        logger.info(f"  SpreadTrading: Found {len(liquid_markets)} liquid markets (vol > $200)")
         
-        for market in liquid_markets[:50]:  # Check top 50 for speed
+        checked = 0
+        for market in liquid_markets[:100]:  # Check top 100 for more opportunities
             ticker = market.get('ticker', '')
+            checked += 1
             
             # Skip if already have position
             if ticker in self.active_orders:
                 continue
             
             # Get orderbook
-            orderbook = self.client.get_orderbook(ticker)
-            if not orderbook:
+            try:
+                orderbook = self.client.get_orderbook(ticker)
+                if not orderbook:
+                    continue
+            except Exception as e:
+                logger.debug(f"  SpreadTrading: Error fetching orderbook for {ticker}: {e}")
                 continue
             
             # Analyze spread
             opp = self._analyze_spread(ticker, market, orderbook)
             if opp:
                 opportunities.append(opp)
+                logger.info(f"  SpreadTrading: Found opportunity {ticker} - spread: {opp['spread']:.1%}")
         
-        print(f"  SpreadTrading: Found {len(opportunities)} spread opportunities")
+        logger.info(f"  SpreadTrading: Checked {checked} markets, found {len(opportunities)} spread opportunities")
         return opportunities
     
     def _analyze_spread(self, ticker: str, market: Dict, orderbook: Dict) -> Optional[Dict]:
@@ -121,7 +131,7 @@ class SpreadTradingStrategy(BaseStrategy):
             self.active_orders[opp['ticker']] = trade
             executed += 1
             
-            print(f"    ✓ Placed limit: {opp['ticker']} at {opp['entry_price']:.1%} "
+            logger.info(f"    ✓ Placed limit: {opp['ticker']} at {opp['entry_price']:.1%} "
                   f"(target: {opp['target_price']:.1%}, spread: {opp['spread']:.1%})")
         
         return executed
@@ -147,7 +157,7 @@ class SpreadTradingStrategy(BaseStrategy):
                     position['status'] = 'closed'
                     position['exit_price'] = current_bid
                     position['profit'] = profit
-                    print(f"    ✓ Closed {ticker}: profit ${profit:.2f}")
+                    logger.info(f"    ✓ Closed {ticker}: profit ${profit:.2f}")
     
     def get_performance(self) -> Dict:
         """Get performance metrics"""
