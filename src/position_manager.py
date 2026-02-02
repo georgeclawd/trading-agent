@@ -106,6 +106,51 @@ class PositionManager:
             os.rename(filepath, backup)
             logger.warning(f"Backed up corrupted file to {backup}")
     
+    def clear_simulated_positions(self, backup: bool = True):
+        """Clear all simulated positions (for weekly competition reset)"""
+        if backup and self.simulated_positions:
+            backup_file = self.data_dir / f'simulated_positions.backup.{datetime.now().strftime("%Y%m%d")}.json'
+            try:
+                data = {ticker: pos.to_dict() for ticker, pos in self.simulated_positions.items()}
+                with open(backup_file, 'w') as f:
+                    json.dump(data, f, indent=2, default=str)
+                logger.info(f"Backed up {len(self.simulated_positions)} simulated positions to {backup_file}")
+            except Exception as e:
+                logger.error(f"Failed to backup simulated positions: {e}")
+        
+        count = len(self.simulated_positions)
+        self.simulated_positions = {}
+        self._save_simulated()
+        logger.info(f"Cleared {count} simulated positions")
+    
+    def get_daily_performance(self, strategy: str = None, simulated: bool = False, date=None) -> Dict:
+        """Get performance for a specific date (defaults to today)"""
+        if date is None:
+            date = datetime.now().date()
+        
+        positions_dict = self.simulated_positions if simulated else self.positions
+        
+        daily_positions = []
+        for pos in positions_dict.values():
+            try:
+                pos_date = datetime.fromisoformat(pos.entry_time).date()
+                if pos_date == date:
+                    if strategy is None or pos.strategy == strategy:
+                        daily_positions.append(pos)
+            except:
+                continue
+        
+        closed = [p for p in daily_positions if p.status == 'closed' and p.pnl is not None]
+        total_pnl = sum(p.pnl for p in closed)
+        
+        return {
+            'date': date.isoformat(),
+            'strategy': strategy or 'all',
+            'total_trades': len(daily_positions),
+            'closed_trades': len(closed),
+            'total_pnl': total_pnl
+        }
+    
     def _save_positions(self):
         """Save real positions to disk"""
         data = {ticker: pos.to_dict() for ticker, pos in self.positions.items()}
@@ -116,9 +161,25 @@ class PositionManager:
         data = {ticker: pos.to_dict() for ticker, pos in self.simulated_positions.items()}
         self._atomic_save(self.simulated_file, data)
     
+    def has_position_today(self, ticker: str, simulated: bool = False) -> bool:
+        """Check if we already have an open position for this ticker from today"""
+        positions_dict = self.simulated_positions if simulated else self.positions
+        
+        if ticker not in positions_dict:
+            return False
+        
+        pos = positions_dict[ticker]
+        try:
+            entry_date = datetime.fromisoformat(pos.entry_time).date()
+            today = datetime.now().date()
+            return entry_date == today
+        except:
+            return False
+    
     def open_position(self, ticker: str, side: str, contracts: int, 
                       entry_price: float, strategy: str, simulated: bool,
-                      market_title: str = '', expected_settlement: str = None) -> Position:
+                      market_title: str = '', expected_settlement: str = None,
+                      check_duplicate: bool = True) -> Optional[Position]:
         """
         Record a new position
         
@@ -131,7 +192,13 @@ class PositionManager:
             simulated: True for dry-run, False for real
             market_title: Human-readable market description
             expected_settlement: ISO datetime when market settles
+            check_duplicate: If True, skip if position already exists today
         """
+        # Check for duplicate from today
+        if check_duplicate and self.has_position_today(ticker, simulated):
+            logger.debug(f"PositionManager: Skipping {ticker} - already traded today")
+            return None
+        
         position = Position(
             ticker=ticker,
             side=side,

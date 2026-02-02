@@ -74,13 +74,17 @@ class BaseStrategy(ABC):
     
     def record_position(self, ticker: str, side: str, contracts: int, 
                        entry_price: float, market_title: str = '', 
-                       expected_settlement: str = None):
+                       expected_settlement: str = None,
+                       check_duplicate: bool = True) -> bool:
         """
         Record a position via PositionManager
         Handles both real and simulated (dry-run) positions
+        
+        Returns:
+            True if position recorded, False if duplicate or error
         """
         if self.position_manager:
-            return self.position_manager.open_position(
+            result = self.position_manager.open_position(
                 ticker=ticker,
                 side=side,
                 contracts=contracts,
@@ -88,11 +92,13 @@ class BaseStrategy(ABC):
                 strategy=self.name,
                 simulated=self.dry_run,
                 market_title=market_title,
-                expected_settlement=expected_settlement
+                expected_settlement=expected_settlement,
+                check_duplicate=check_duplicate
             )
+            return result is not None
         else:
             logger.warning(f"{self.name}: No position manager configured")
-            return None
+            return False
     
     def close_position(self, ticker: str, exit_price: float, pnl: float):
         """

@@ -58,7 +58,7 @@ class WeatherPredictionStrategy(BaseStrategy):
                 
                 if self.dry_run:
                     # SIMULATED: Record position without executing
-                    self.record_position(
+                    recorded = self.record_position(
                         ticker=ticker,
                         side='YES',
                         contracts=contracts,
@@ -66,7 +66,11 @@ class WeatherPredictionStrategy(BaseStrategy):
                         market_title=opp.get('market', ''),
                         expected_settlement=opp.get('settlement_time')
                     )
-                    logger.info(f"    [SIMULATED] ✓ Would execute: {ticker} (EV: {opp.get('expected_value'):.1%})")
+                    if recorded:
+                        logger.info(f"    [SIMULATED] ✓ Would execute: {ticker} (EV: {opp.get('expected_value'):.1%})")
+                    else:
+                        logger.debug(f"    [SIMULATED] Skipping {ticker} - already traded today")
+                        continue
                 else:
                     # REAL: Execute via Kalshi API
                     try:
@@ -77,14 +81,17 @@ class WeatherPredictionStrategy(BaseStrategy):
                             count=contracts
                         )
                         if result.get('order_id'):
-                            self.record_position(
+                            recorded = self.record_position(
                                 ticker=ticker,
                                 side='YES',
                                 contracts=contracts,
                                 entry_price=market_price,
                                 market_title=opp.get('market', '')
                             )
-                            logger.info(f"    [REAL] ✓ Executed: {ticker} (EV: {opp.get('expected_value'):.1%}) Order: {result['order_id']}")
+                            if recorded:
+                                logger.info(f"    [REAL] ✓ Executed: {ticker} (EV: {opp.get('expected_value'):.1%}) Order: {result['order_id']}")
+                            else:
+                                logger.debug(f"    [REAL] Skipping {ticker} - already traded today")
                         else:
                             logger.error(f"    [REAL] ✗ Order failed: {result}")
                     except Exception as e:
