@@ -304,16 +304,16 @@ class CryptoMomentumStrategy(BaseStrategy):
         
         # MACD
         macd = self.compute_macd(self.assets['BTC']['price_history'], self.macd_fast, self.macd_slow, self.macd_signal)
-        if macd['hist'] is not None and macd['hist_delta'] is not None:
-            expanding_green = macd['hist'] > 0 and macd['hist_delta'] > 0
-            expanding_red = macd['hist'] < 0 and macd['hist_delta'] < 0
+        if macd.get('histogram') is not None and macd['hist_delta'] is not None:
+            expanding_green = macd.get('histogram') > 0 and macd['hist_delta'] > 0
+            expanding_red = macd.get('histogram') < 0 and macd['hist_delta'] < 0
             if expanding_green:
                 up += 2.0
             if expanding_red:
                 down += 2.0
-            if macd['macd'] > 0:
+            if macd.get('macd') > 0:
                 up += 1.0
-            if macd['macd'] < 0:
+            if macd.get('macd') < 0:
                 down += 1.0
         
         total = up + down
@@ -340,7 +340,9 @@ class CryptoMomentumStrategy(BaseStrategy):
         minutes_into = now.minute % 15
         return 15 - minutes_into
     
-    async def analyze(self) -> List[Dict]:
+    async def analyze(self):
+        logger.info("🔍 CryptoMomentum: Starting analysis...")
+        """FIXED: Proper edge calculation comparing BOTH sides"""
         """FIXED: Proper edge calculation comparing BOTH sides"""
         opportunities = []
         
@@ -501,3 +503,52 @@ class CryptoMomentumStrategy(BaseStrategy):
     
     def get_performance(self) -> Dict:
         return {'name': self.name, 'trades': len(self.trades)}
+
+    async def continuous_trade_loop(self):
+        """Continuous trading loop - check for entry/exit every minute"""
+        logger.info("🔄 CryptoMomentum: Starting continuous trade loop")
+        
+        while True:
+            try:
+                now = datetime.now()
+                minutes_into = now.minute % 15
+                
+                # Log which phase of 15-min window we're in
+                if minutes_into < 5:
+                    phase = "early"
+                elif minutes_into < 10:
+                    phase = "mid"
+                else:
+                    phase = "late"
+                
+                # Only trade if we have enough candles
+                if len(self.assets['BTC']['candles']) >= 30:
+                    # Check for entry opportunities
+                    opportunities = await self.analyze()
+                    
+                    if opportunities:
+                        logger.info(f"🎯 CryptoMomentum: Found {len(opportunities)} opportunities ({phase} phase)")
+                        executed = await self.execute(opportunities)
+                        if executed:
+                            logger.info(f"✅ CryptoMomentum: Executed {executed} trades")
+                    else:
+                        logger.debug(f"📊 CryptoMomentum: No opportunities ({phase} phase, {minutes_into}m into window)")
+                else:
+                    logger.info(f"📊 CryptoMomentum: Building data ({len(self.assets['BTC']['candles'])}/30 candles)")
+                
+                # Wait 60 seconds before next check
+                await asyncio.sleep(60)
+                
+            except asyncio.CancelledError:
+                logger.info("🛑 CryptoMomentum: Continuous trade loop cancelled")
+                break
+            except Exception as e:
+                logger.error(f"❌ CryptoMomentum: Trade loop error: {e}")
+                await asyncio.sleep(60)
+
+    async def _monitor_positions(self):
+        """Monitor existing positions - simplified for demo"""
+        if not self.position_monitor:
+            return
+        # Basic monitoring - can be expanded later
+        pass
