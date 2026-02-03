@@ -10,8 +10,17 @@ bot:
   display_timezone: "EST"  # Display for user (UTC-5)
 
 strategies:
+  # DISABLE all other strategies - only running PureCopy
+  weather_prediction:
+    enabled: false
+  spread_trading:
+    enabled: false
+  longshot_weather:
+    enabled: false
   crypto_momentum:
-    enabled: false  # DISABLED - using PureCopy instead
+    enabled: false
+  
+  # ONLY PureCopy is enabled
   PureCopy:
     enabled: true
     allocation: 100
@@ -25,8 +34,7 @@ strategies:
         - name: "k9Q2mX4L8A7ZP3R"
           address: "0xd0d6053c3c37e727402d84c14069780d360993aa"
       copy_sizing:
-        method: "proportional"  # Copy size proportional to competitor
-        ratio: 0.1  # Copy 10% of their size
+        method: "bankroll_ratio"  # Size based on bankroll ratio
         max_contracts: 10
       poll_interval: 10  # seconds
 
