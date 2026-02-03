@@ -176,10 +176,16 @@ class PureCopyStrategy(BaseStrategy):
             logger.info(f"   Skipping non-15m market: {pm_slug}")
             return
         
-        kalshi_ticker = self._map_pm_slug_to_kalshi(pm_slug, trade)
+        # Get the current ACTIVE Kalshi market for this crypto
+        # (Not the historical market from the trade timestamp)
+        crypto = self._detect_crypto_from_slug(pm_slug)
+        if not crypto:
+            logger.warning(f"   Could not detect crypto from slug '{pm_slug}'")
+            return
         
+        kalshi_ticker = self._get_current_kalshi_ticker(crypto)
         if not kalshi_ticker:
-            logger.warning(f"   Could not map slug '{pm_slug}' to Kalshi ticker")
+            logger.warning(f"   No active Kalshi market for {crypto}")
             return
         
         logger.info(f"   Kalshi Ticker: {kalshi_ticker}")
@@ -350,6 +356,48 @@ class PureCopyStrategy(BaseStrategy):
         kalshi_ticker = f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-00"
         logger.info(f"   Mapped: {pm_slug} ({dt_utc.strftime('%H:%M')} UTC / {dt_est.strftime('%H:%M')} EST) -> {kalshi_ticker}")
         return kalshi_ticker
+    
+    def _detect_crypto_from_slug(self, pm_slug: str) -> Optional[str]:
+        """Detect crypto type from Polymarket slug"""
+        if not pm_slug:
+            return None
+        
+        parts = pm_slug.split('-')
+        if len(parts) < 1:
+            return None
+        
+        crypto_map = {'btc': 'BTC', 'eth': 'ETH', 'sol': 'SOL', 'bitcoin': 'BTC', 'ethereum': 'ETH', 'solana': 'SOL'}
+        return crypto_map.get(parts[0].lower())
+    
+    def _get_current_kalshi_ticker(self, crypto: str) -> Optional[str]:
+        """Get the currently active Kalshi ticker for this crypto"""
+        # Find which 15m window we're in
+        from datetime import timedelta
+        
+        now_utc = datetime.now(timezone.utc)
+        now_est = now_utc - timedelta(hours=5)
+        
+        # Round down to nearest 15 minutes to get current window start
+        current_minute = now_est.minute
+        window_start_minute = (current_minute // 15) * 15
+        window_start = now_est.replace(minute=window_start_minute, second=0, microsecond=0)
+        
+        # Build ticker
+        series_map = {'BTC': 'KXBTC15M', 'ETH': 'KXETH15M', 'SOL': 'KSOL15M'}
+        series = series_map.get(crypto)
+        if not series:
+            return None
+        
+        month_map = {1:'JAN', 2:'FEB', 3:'MAR', 4:'APR', 5:'MAY', 6:'JUN',
+                    7:'JUL', 8:'AUG', 9:'SEP', 10:'OCT', 11:'NOV', 12:'DEC'}
+        
+        year_str = str(window_start.year)[2:]
+        month_str = month_map.get(window_start.month, 'XXX')
+        day_str = f"{window_start.day:02d}"
+        hour_str = f"{window_start.hour:02d}"
+        min_str = f"{window_start.minute:02d}"
+        
+        return f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-00"
     
     async def _lookup_pm_market(self, asset_id: str) -> Optional[Dict]:
         """Look up Polymarket market from asset ID"""
