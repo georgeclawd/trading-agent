@@ -1,12 +1,13 @@
 """
-Pure Copy Trading Strategy - Simplified
+Pure Copy Trading Strategy - Dynamic market discovery
 
 Watch competitors on Polymarket, copy trades to Kalshi.
+Pulls available markets dynamically instead of hardcoding.
 """
 
 import asyncio
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from datetime import datetime, timezone, timedelta
 from strategy_framework import BaseStrategy
 
@@ -20,7 +21,6 @@ class PureCopyStrategy(BaseStrategy):
         super().__init__(config, client, position_manager)
         self.name = "PureCopy"
         
-        # Competitors
         self.competitors = {
             'distinct-baguette': '0xe00740bce98a594e26861838885ab310ec3b548c',
             '0x8dxd': '0x63ce342161250d705dc0b16df89036c8e5f9ba9a',
@@ -36,6 +36,7 @@ class PureCopyStrategy(BaseStrategy):
         self.seen_trades = set()
         self.our_bankroll = 57.0
         self._running = False
+        self.kalshi_markets = {}  # crypto -> ticker mapping
     
     def _get_crypto(self, slug: str) -> Optional[str]:
         """Detect crypto from Polymarket slug"""
@@ -52,43 +53,41 @@ class PureCopyStrategy(BaseStrategy):
         }
         return crypto_map.get(parts[0].lower())
     
-    def _get_kalshi_ticker(self, crypto: str) -> Optional[str]:
-        """Generate Kalshi ticker for current window"""
-        if not crypto:
-            return None
-        
-        # Get current EST time
-        now_utc = datetime.now(timezone.utc)
-        now_est = now_utc - timedelta(hours=5)
-        
-        # Find window close time (next 15-min boundary)
-        minute = now_est.minute
-        if minute < 15:
-            close_min = 15
-        elif minute < 30:
-            close_min = 30
-        elif minute < 45:
-            close_min = 45
-        else:
-            close_min = 0
-            now_est = now_est + timedelta(hours=1)
-        
-        # Build ticker
-        series_map = {'BTC': 'KXBTC15M', 'ETH': 'KXETH15M', 'SOL': 'KSOL15M'}
-        series = series_map.get(crypto)
-        if not series:
-            return None
-        
-        month_map = {1:'JAN', 2:'FEB', 3:'MAR', 4:'APR', 5:'MAY', 6:'JUN',
-                    7:'JUL', 8:'AUG', 9:'SEP', 10:'OCT', 11:'NOV', 12:'DEC'}
-        
-        year = str(now_est.year)[2:]
-        month = month_map.get(now_est.month, 'XXX')
-        day = f"{now_est.day:02d}"
-        hour = f"{now_est.hour:02d}"
-        minute_str = f"{close_min:02d}"
-        
-        return f"{series}-{year}{month}{day}{hour}{minute_str}-00"
+    def _refresh_kalshi_markets(self):
+        """Pull available 15M markets from Kalshi"""
+        try:
+            markets = self.client.get_markets(limit=100)
+            if not markets or 'markets' not in markets:
+                return
+            
+            self.kalshi_markets = {}
+            for m in markets.get('markets', []):
+                ticker = m.get('ticker', '')
+                # Look for 15M crypto markets
+                if '15M' not in ticker:
+                    continue
+                
+                # Determine crypto from ticker
+                crypto = None
+                if 'BTC' in ticker or 'bitcoin' in ticker.lower():
+                    crypto = 'BTC'
+                elif 'ETH' in ticker or 'ethereum' in ticker.lower():
+                    crypto = 'ETH'
+                elif 'SOL' in ticker or 'solana' in ticker.lower():
+                    crypto = 'SOL'
+                
+                if crypto and m.get('status') == 'active':
+                    # Check has liquidity
+                    ob = self.client.get_orderbook(ticker)
+                    if ob:
+                        yes = ob.get('orderbook', {}).get('yes')
+                        no = ob.get('orderbook', {}).get('no')
+                        if yes or no:
+                            self.kalshi_markets[crypto] = ticker
+                            logger.info(f"  Found market: {crypto} -> {ticker}")
+            
+        except Exception as e:
+            logger.error(f"Error refreshing markets: {e}")
     
     async def _copy_trade(self, competitor: str, trade: Dict):
         """Copy a single trade to Kalshi"""
@@ -104,20 +103,9 @@ class PureCopyStrategy(BaseStrategy):
             return
         
         # Get Kalshi ticker
-        ticker = self._get_kalshi_ticker(crypto)
+        ticker = self.kalshi_markets.get(crypto)
         if not ticker:
-            return
-        
-        # Check market has liquidity
-        orderbook = self.client.get_orderbook(ticker)
-        if not orderbook:
-            logger.info(f"   Market {ticker} not found")
-            return
-        
-        yes = orderbook.get('orderbook', {}).get('yes')
-        no = orderbook.get('orderbook', {}).get('no')
-        if not yes and not no:
-            logger.info(f"   Market {ticker} closed (no liquidity)")
+            logger.info(f"   No Kalshi market for {crypto}")
             return
         
         # Calculate trade params
@@ -174,10 +162,20 @@ class PureCopyStrategy(BaseStrategy):
         self._running = True
         logger.info("🚀 PureCopy started")
         
+        # Refresh markets initially
+        logger.info("📊 Discovering Kalshi markets...")
+        self._refresh_kalshi_markets()
+        
+        poll_count = 0
         while self._running:
             try:
+                # Refresh markets every 10 polls (every ~50 seconds)
+                if poll_count % 10 == 0:
+                    self._refresh_kalshi_markets()
+                
                 await self._poll_once()
-                await asyncio.sleep(5)  # Poll every 5 seconds
+                poll_count += 1
+                await asyncio.sleep(5)
             except Exception as e:
                 logger.error(f"Poll error: {e}")
                 await asyncio.sleep(5)
