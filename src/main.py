@@ -231,11 +231,11 @@ class TradingAgent:
         
         logger.info(f"✅ Registered {len(self.strategy_manager.strategies)} strategies")
         
-        # Print weekly competition header
-        logger.info("🏆 WEEKLY COMPETITION MODE")
-        logger.info("   CryptoMomentum: REAL MONEY")
-        logger.info("   All others: SIMULATED (dry run)")
-        logger.info("   Winner determined by real + hypothetical P&L")
+        # Print active strategies
+        logger.info("🏆 ACTIVE STRATEGIES:")
+        for strategy in self.strategy_manager.strategies:
+            mode = "LIVE" if not getattr(strategy, 'dry_run', True) else "DRY RUN"
+            logger.info(f"   {strategy.name}: {mode}")
     
     async def _price_fetcher_loop(self):
         """

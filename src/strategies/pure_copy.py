@@ -47,8 +47,12 @@ class PureCopyStrategy(BaseStrategy):
         # Market cache
         self.pm_market_cache = {}
         
-        # Our bankroll
-        self.our_bankroll = config.get('initial_bankroll', 100.0)
+        # Get actual bankroll from Kalshi
+        try:
+            balance_data = client.get_balance() if client else {}
+            self.our_bankroll = balance_data.get('balance', 100.0)
+        except:
+            self.our_bankroll = config.get('initial_bankroll', 100.0)
         
         # Start background polling task
         self.polling_task = None
@@ -56,7 +60,7 @@ class PureCopyStrategy(BaseStrategy):
         
         logger.info("✅ Pure Copy Strategy initialized")
         logger.info(f"   Tracking {len(self.competitors)} competitors")
-        logger.info(f"   Our bankroll: ${self.our_bankroll:,.2f}")
+        logger.info(f"   Our bankroll: ${self.our_bankroll:,.2f} (from Kalshi)")
     
     def _get_est_time(self, utc_dt: datetime) -> str:
         """Convert UTC to EST for display"""
