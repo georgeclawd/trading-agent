@@ -363,6 +363,7 @@ class CryptoMomentumStrategy(BaseStrategy):
             price_history = info['price_history']
             
             if len(candles) < 30:
+                logger.info(f"⏳ {asset}: Building data ({len(candles)}/30 candles)")
                 continue
             
             current_price = candles[-1]['close']
@@ -376,6 +377,20 @@ class CryptoMomentumStrategy(BaseStrategy):
             time_aware = self.apply_time_awareness(direction_score, remaining_minutes)
             model_up = time_aware['adjusted_up']
             model_down = time_aware['adjusted_down']
+            
+            # Log algorithm thinking
+            logger.info("=" * 60)
+            logger.info(f"🔍 {asset} ANALYSIS - {minutes}m into 15-min window")
+            logger.info("=" * 60)
+            logger.info(f"📊 PRICE DATA:")
+            logger.info(f"   • Current price: ${current_price:,.2f}")
+            logger.info(f"   • VWAP: ${vwap:,.2f}")
+            logger.info(f"   • Price vs VWAP: {'ABOVE' if current_price > vwap else 'BELOW'}")
+            logger.info(f"📊 MODEL CALCULATIONS:")
+            logger.info(f"   • Raw direction score: {direction_score:+.2f} (-1=bearish, +1=bullish)")
+            logger.info(f"   • After time adjustment: UP={model_up:.1%}, DOWN={model_down:.1%}")
+            logger.info(f"   • Remaining time: {remaining_minutes} minutes")
+            logger.info(f"   • Model prediction: {'BULLISH' if model_up > model_down else 'BEARISH' if model_down > model_up else 'NEUTRAL'}")
             
             # Get market data
             try:
@@ -461,7 +476,11 @@ class CryptoMomentumStrategy(BaseStrategy):
                         'remaining_minutes': remaining_minutes
                     })
                     
-                    logger.info(f"OPPORTUNITY {ticker}: {best_side} | Edge={best_edge:.2%} | Phase={phase} | Price={entry_price:.0%}")
+                    logger.info(f"✅ OPPORTUNITY FOUND: {ticker}")
+                    logger.info(f"   • Our recommendation: {best_side}")
+                    logger.info(f"   • Edge: {best_edge:.2%} (threshold: {threshold:.0%})")
+                    logger.info(f"   • Market price: {entry_price:.0%}")
+                    logger.info(f"   • Phase: {phase} ({remaining_minutes} min left)")
                     
                 except Exception as e:
                     continue
@@ -469,47 +488,114 @@ class CryptoMomentumStrategy(BaseStrategy):
         return opportunities
     
     async def execute(self, opportunities: List[Dict]) -> int:
-        """Execute trades with consensus validation"""
+        """Execute trades with consensus validation - DETAILED LOGGING"""
         executed = 0
         
         # Get competitor consensus
-        logger.info("🤝 Checking competitor consensus...")
+        logger.info("=" * 60)
+        logger.info("🤝 CHECKING COMPETITOR CONSENSUS")
+        logger.info("=" * 60)
+        
+        consensus = None
         try:
             consensus = self.consensus_tracker.get_competitor_consensus()
-            logger.info(f"📊 Consensus: {consensus['bullish_count']} bullish, {consensus['bearish_count']} bearish, {consensus['neutral_count']} neutral")
-            logger.info(f"📊 Consensus side: {consensus['consensus_side']} ({consensus['agreement_ratio']:.0%} agreement)")
+            logger.info(f"📊 COMPETITOR VOTES:")
+            logger.info(f"   • Bullish (YES): {consensus['bullish_count']} traders")
+            logger.info(f"   • Bearish (NO):  {consensus['bearish_count']} traders")  
+            logger.info(f"   • Neutral:       {consensus['neutral_count']} traders")
+            logger.info(f"📊 COMPETITOR CONSENSUS: {consensus['consensus_side']} ({consensus['agreement_ratio']:.0%} agreement)")
+            if consensus.get('details'):
+                logger.info(f"📊 INDIVIDUAL VOTES:")
+                for vote in consensus['details']:
+                    logger.info(f"   • {vote['name']}: {vote['side']}")
         except Exception as e:
-            logger.warning(f"Could not get consensus: {e}")
-            consensus = None
+            logger.warning(f"⚠️  Could not get consensus: {e}")
         
         for opp in opportunities:
             ticker = opp['ticker']
             side = opp['side']
             entry_price_cents = int(opp['entry_price'] * 100)
             
+            logger.info("-" * 60)
+            logger.info(f"🎯 EVALUATING: {ticker}")
+            logger.info("-" * 60)
+            logger.info(f"📈 OUR ALGORITHM DECISION:")
+            logger.info(f"   • Signal: {side}")
+            logger.info(f"   • Edge: {opp['best_edge']:.2%}")
+            logger.info(f"   • Model UP: {opp['model_up']:.1%} | Model DOWN: {opp['model_down']:.1%}")
+            logger.info(f"   • Market UP: {opp['market_up']:.1%} | Market DOWN: {opp['market_down']:.1%}")
+            logger.info(f"   • Phase: {opp['phase']} (threshold: {opp['threshold']:.0%})")
+            logger.info(f"   • Entry price: {opp['entry_price']:.0%}")
+            
             # Check duplicate
             if self.position_manager and self.position_manager.has_open_position(ticker, self.dry_run):
+                logger.info(f"   ⏸️  SKIPPED: Already have position in {ticker}")
                 continue
+            
+            # Compare with consensus
+            our_signal = side
+            competitor_signal = consensus['consensus_side'] if consensus else 'UNKNOWN'
+            agreement = consensus['agreement_ratio'] if consensus else 0.0
+            
+            logger.info(f"📊 COMPARISON:")
+            logger.info(f"   • Our signal:      {our_signal}")
+            logger.info(f"   • Competitors:     {competitor_signal}")
+            logger.info(f"   • Agreement:       {agreement:.0%}")
             
             # Position sizing
             edge = opp['best_edge']
             if edge >= 0.20:
-                contracts = 5
+                base_contracts = 5
             elif edge >= 0.10:
-                contracts = 3
+                base_contracts = 3
             else:
-                contracts = 1
+                base_contracts = 1
+            
+            # Apply consensus modifier
+            final_signal = our_signal
+            final_confidence = edge
+            
+            if consensus and competitor_signal != 'UNKNOWN':
+                if competitor_signal == our_signal:
+                    # Agreement - boost confidence
+                    final_confidence = edge * 1.2
+                    logger.info(f"   ✅ COMPETITORS AGREE - Boosting confidence to {final_confidence:.2%}")
+                elif competitor_signal == 'NEUTRAL':
+                    # Neutral - proceed normally
+                    logger.info(f"   ⚪ COMPETITORS NEUTRAL - Using our signal")
+                else:
+                    # Disagreement - be cautious
+                    if agreement >= 0.6:
+                        # Strong disagreement - skip
+                        logger.info(f"   ❌ SKIP: Strong competitor consensus ({agreement:.0%}) disagrees with our signal!")
+                        logger.info(f"   📝 Decision: NO TRADE - Competitors say {competitor_signal}, we say {our_signal}")
+                        continue
+                    else:
+                        # Weak disagreement - reduce size
+                        base_contracts = max(1, base_contracts // 2)
+                        final_confidence = edge * 0.7
+                        logger.info(f"   ⚠️  DISAGREEMENT - Reducing position size to {base_contracts}, confidence {final_confidence:.2%}")
+            
+            contracts = base_contracts
+            
+            logger.info(f"   📋 FINAL DECISION:")
+            logger.info(f"   • Signal:     {final_signal}")
+            logger.info(f"   • Contracts:  {contracts}")
+            logger.info(f"   • Confidence: {final_confidence:.2%}")
+            logger.info(f"   • Reason:     {our_signal} (our algo) + {competitor_signal} (competitors)")
             
             if self.dry_run:
                 self.record_position(ticker, side, contracts, entry_price_cents, ticker)
-                logger.info(f"[SIM] {ticker} {side} x{contracts} @ {entry_price_cents}c")
+                logger.info(f"   📝 [SIMULATION] Would trade: {ticker} {side} x{contracts} @ {entry_price_cents}c")
                 executed += 1
             else:
                 result = self.client.place_order(ticker, side.lower(), entry_price_cents, contracts)
                 if result.get('order_id'):
-                    logger.info(f"[REAL] {ticker} {side} x{contracts} @ {entry_price_cents}c - {result['order_id']}")
+                    logger.info(f"   💰 [REAL TRADE] {ticker} {side} x{contracts} @ {entry_price_cents}c - Order: {result['order_id']}")
                     self.record_position(ticker, side, contracts, entry_price_cents, ticker)
                     executed += 1
+                else:
+                    logger.error(f"   ❌ [TRADE FAILED] {ticker} {side} - Error: {result}")
         
         return executed
     
@@ -522,6 +608,7 @@ class CryptoMomentumStrategy(BaseStrategy):
     async def continuous_trade_loop(self):
         """Continuous trading loop - check for entry/exit every minute"""
         logger.info("🔄 CryptoMomentum: Starting continuous trade loop")
+        logger.info("=" * 60)
         
         while True:
             try:
@@ -536,20 +623,30 @@ class CryptoMomentumStrategy(BaseStrategy):
                 else:
                     phase = "late"
                 
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info(f"⏰ TRADING CYCLE - {now.strftime('%H:%M:%S')} EST | Window: {phase.upper()} ({minutes_into}/15 min)")
+                logger.info("=" * 60)
+                
                 # Only trade if we have enough candles
                 if len(self.assets['BTC']['candles']) >= 30:
                     # Check for entry opportunities
                     opportunities = await self.analyze()
                     
                     if opportunities:
-                        logger.info(f"🎯 CryptoMomentum: Found {len(opportunities)} opportunities ({phase} phase)")
+                        logger.info(f"🎯 Found {len(opportunities)} trading opportunity/ies")
                         executed = await self.execute(opportunities)
                         if executed:
-                            logger.info(f"✅ CryptoMomentum: Executed {executed} trades")
+                            logger.info(f"✅ EXECUTED {executed} trade(s) this cycle")
+                        else:
+                            logger.info(f"⏸️  No trades executed (filtered by consensus or duplicates)")
                     else:
-                        logger.debug(f"📊 CryptoMomentum: No opportunities ({phase} phase, {minutes_into}m into window)")
+                        logger.info(f"📊 No opportunities found this cycle")
                 else:
-                    logger.info(f"📊 CryptoMomentum: Building data ({len(self.assets['BTC']['candles'])}/30 candles)")
+                    logger.info(f"⏳ Building data ({len(self.assets['BTC']['candles'])}/30 candles)...")
+                
+                logger.info("=" * 60)
+                logger.info(f"⏱️  Next check in 60 seconds...")
                 
                 # Wait 60 seconds before next check
                 await asyncio.sleep(60)
