@@ -161,55 +161,26 @@ class PureCopyStrategy(BaseStrategy):
         logger.info(f"   Size: ${size:.2f}")
         logger.info(f"   Price: {price:.0%}")
         
-        # Try to detect crypto from trade data directly (faster than API lookup)
-        pm_slug = trade.get('slug', '')
+        # Extract market info from trade data
+        pm_slug = trade.get('slug', '')  # e.g., "btc-updown-15m-1770158700"
         pm_title = trade.get('title', '')
         
-        # Debug: log what fields we have
-        logger.debug(f"   Trade fields: slug='{pm_slug}', title='{pm_title}', asset='{asset_id[:20]}...'")
+        logger.info(f"   Polymarket Slug: {pm_slug or 'Unknown'}")
+        logger.info(f"   Title: {pm_title[:60] if pm_title else 'Unknown'}...")
         
-        # Fallback to API lookup if needed
-        if not pm_slug:
-            pm_market = await self._lookup_pm_market(asset_id)
-            if pm_market:
-                pm_slug = pm_market.get('marketSlug', '')
-                pm_title = pm_market.get('question', '')
-                logger.debug(f"   API lookup: slug='{pm_slug}', title='{pm_title[:50]}...'")
-        
-        logger.info(f"   Market: {pm_slug or 'Unknown'}")
-        
-        # Try to detect from whatever we have
-        crypto = None
-        if pm_slug or pm_title:
-            crypto = self._detect_crypto_type(pm_slug, pm_title)
-        
-        # Last resort: try to detect from asset_id
-        if not crypto and asset_id:
-            crypto = self._detect_crypto_from_asset(asset_id)
-        
-        if not crypto:
-            logger.warning(f"   Could not detect crypto type from slug='{pm_slug}', title='{pm_title}'")
-            logger.info(f"   Trying all crypto markets as fallback...")
-            # Brute force: try BTC, ETH, SOL markets
-            for try_crypto in ['BTC', 'ETH', 'SOL']:
-                kalshi_ticker = self._generate_kalshi_ticker(try_crypto)
-                if kalshi_ticker:
-                    logger.info(f"   Trying {try_crypto}: {kalshi_ticker}")
-                    success = await self._try_copy_trade(competitor, kalshi_ticker, side, size, price)
-                    if success:
-                        logger.info(f"   ✅ Successfully copied on {try_crypto} market!")
-                        return
-            logger.warning(f"   Could not copy trade on any market")
-            return
-        
-        logger.info(f"   Crypto: {crypto}")
-        kalshi_ticker = self._generate_kalshi_ticker(crypto)
+        # Parse the Polymarket slug to get crypto and timestamp
+        # Format: {crypto}-updown-15m-{unix_timestamp}
+        kalshi_ticker = self._map_pm_slug_to_kalshi(pm_slug)
         
         if not kalshi_ticker:
-            logger.error("   Could not generate Kalshi ticker")
+            logger.warning(f"   Could not map slug '{pm_slug}' to Kalshi ticker")
             return
         
-        logger.info(f"   Kalshi: {kalshi_ticker}")
+        logger.info(f"   Kalshi Ticker: {kalshi_ticker}")
+        
+        # Determine side - for BUY/SELL
+        # On Polymarket: BUY = buy YES contracts, SELL = sell YES (or buy NO)
+        # On Kalshi: YES contracts for buy side, NO contracts for sell side
         kalshi_side = 'YES' if side == 'BUY' else 'NO'
         
         # Size based on bankroll ratio
@@ -269,6 +240,61 @@ class PureCopyStrategy(BaseStrategy):
         # Asset IDs are long strings, we can't reliably detect from them
         # Return None to trigger the brute force approach
         return None
+    
+    def _map_pm_slug_to_kalshi(self, pm_slug: str) -> Optional[str]:
+        """
+        Map Polymarket slug to Kalshi ticker
+        
+        Polymarket: btc-updown-15m-1770158700 (crypto-updown-15m-{unix_timestamp})
+        Kalshi:     KXBTC15M-26FEB031800-00    (KX{CRYPTO}15M-YY{MON}{DD}{HH}{MM}-00)
+        """
+        if not pm_slug:
+            return None
+        
+        try:
+            # Parse slug: btc-updown-15m-1770158700
+            parts = pm_slug.split('-')
+            if len(parts) < 4:
+                logger.debug(f"   Invalid slug format: {pm_slug}")
+                return None
+            
+            # Extract crypto type
+            crypto_map = {'btc': 'BTC', 'eth': 'ETH', 'sol': 'SOL'}
+            crypto = crypto_map.get(parts[0].lower())
+            if not crypto:
+                logger.debug(f"   Unknown crypto in slug: {parts[0]}")
+                return None
+            
+            # Extract timestamp (last part)
+            try:
+                timestamp = int(parts[-1])
+            except ValueError:
+                logger.debug(f"   Invalid timestamp in slug: {parts[-1]}")
+                return None
+            
+            # Convert timestamp to datetime
+            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            
+            # Build Kalshi ticker
+            series_map = {'BTC': 'KXBTC15M', 'ETH': 'KXETH15M', 'SOL': 'KSOL15M'}
+            series = series_map[crypto]
+            
+            month_map = {1:'JAN', 2:'FEB', 3:'MAR', 4:'APR', 5:'MAY', 6:'JUN',
+                        7:'JUL', 8:'AUG', 9:'SEP', 10:'OCT', 11:'NOV', 12:'DEC'}
+            
+            year_str = str(dt.year)[2:]  # '26' from '2026'
+            month_str = month_map.get(dt.month, 'XXX')
+            day_str = f"{dt.day:02d}"
+            hour_str = f"{dt.hour:02d}"
+            min_str = f"{dt.minute:02d}"
+            
+            kalshi_ticker = f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-00"
+            logger.debug(f"   Mapped: {pm_slug} -> {kalshi_ticker}")
+            return kalshi_ticker
+            
+        except Exception as e:
+            logger.warning(f"   Error mapping slug '{pm_slug}': {e}")
+            return None
     
     async def _lookup_pm_market(self, asset_id: str) -> Optional[Dict]:
         """Look up Polymarket market from asset ID"""
@@ -383,12 +409,8 @@ class PureCopyStrategy(BaseStrategy):
                                 if tx_hash:
                                     if tx_hash in self.seen_trades:
                                         logger.debug(f"      Skipping seen trade: {tx_hash[:20]}...")
-                                    elif trade_type != 'TRADE':
-                                        # Skip REDEEM, ORDER_CREATED, etc - only copy actual trades
-                                        logger.debug(f"      Skipping non-trade activity: {trade_type}")
-                                        self.seen_trades.add(tx_hash)  # Mark as seen so we don't re-log
                                     else:
-                                        logger.info(f"🚨 NEW TRADE from {name}! Type: {trade_type}")
+                                        logger.info(f"🚨 NEW {trade_type} from {name}!")
                                         logger.info(f"      Tx: {tx_hash[:30]}...")
                                         self.seen_trades.add(tx_hash)
                                         await self._process_competitor_trade(name, trade)
