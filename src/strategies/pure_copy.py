@@ -361,10 +361,13 @@ class PureCopyStrategy(BaseStrategy):
     
     async def continuous_trade_loop(self):
         """Alternative entry point"""
+        logger.info(" continuous_trade_loop() called - starting scan...")
         await self.scan()
+        logger.info(" scan() completed - entering keep-alive loop")
         # Keep running
         while self._running:
             await asyncio.sleep(1)
+        logger.info(" Keep-alive loop exited")
     
     def get_performance(self):
         return {'name': self.name, 'trades': len(self.trades)}

@@ -317,8 +317,10 @@ class TradingAgent:
         # Start independent strategy loops with different intervals
         strategy_tasks = []
         for strategy in self.strategy_manager.strategies:
+            logger.info(f"🔄 Starting loop for {strategy.name}...")
             task = asyncio.create_task(self._strategy_loop(strategy))
             strategy_tasks.append(task)
+            logger.info(f"✅ Started {strategy.name} loop task")
         
         # Keep main loop alive
         while self.running:
@@ -371,7 +373,10 @@ class TradingAgent:
             logger.info("👥 Copying competitor trades in real-time")
         
         # Run the strategy's continuous loop
-        await strategy.continuous_trade_loop()
+        try:
+            await strategy.continuous_trade_loop()
+        except Exception as e:
+            logger.error(f"❌ Error in {strategy.name} continuous loop: {e}", exc_info=True)
     
     async def _run_strategy_loop(self, strategy, interval, interval_min, aligned=False):
         """Run strategy in regular loop"""
