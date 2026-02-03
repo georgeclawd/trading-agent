@@ -378,28 +378,37 @@ class PureCopyStrategy(BaseStrategy):
     
     def _get_current_kalshi_ticker(self, crypto: str) -> Optional[str]:
         """Get the currently active Kalshi ticker for this crypto"""
-        # Find which 15m window we're in
+        # Kalshi 15M markets are 30-minute windows that close at :30
+        # Ticker uses the CLOSE time (end of window), not start
         from datetime import timedelta
         
         now_utc = datetime.now(timezone.utc)
         now_est = now_utc - timedelta(hours=5)
         
-        # Round down to nearest 15 minutes to get current window start
+        # Kalshi windows are 30 min: :00-:30 and :30-:00
+        # Round UP to nearest 30 min to get window CLOSE time for ticker
         current_minute = now_est.minute
-        window_start_minute = (current_minute // 15) * 15
-        window_start = now_est.replace(minute=window_start_minute, second=0, microsecond=0)
+        if current_minute < 30:
+            window_close_minute = 30
+        else:
+            window_close_minute = 0
+            now_est = now_est + timedelta(hours=1)
+        
+        window_close = now_est.replace(minute=window_close_minute, second=0, microsecond=0)
         
         # Calculate how far into the window we are
-        minutes_into_window = now_est.minute - window_start_minute
-        seconds_into_window = minutes_into_window * 60 + now_est.second
+        if current_minute < 30:
+            seconds_into_window = current_minute * 60 + now_est.second
+        else:
+            seconds_into_window = (current_minute - 30) * 60 + now_est.second
         
-        # Markets are typically tradeable for ~10-12 minutes of the 15m window
-        # After that, they close to prepare for settlement
-        if seconds_into_window > 600:  # 10 minutes = 600 seconds
+        # Markets close ~10-12 min before window end for settlement
+        # Window is 30 min, so tradeable for ~20 min
+        if seconds_into_window > 1200:  # 20 minutes = 1200 seconds
             logger.info(f"   Market likely closed (window started {seconds_into_window}s ago), skipping")
             return None
         
-        # Build ticker
+        # Build ticker using WINDOW CLOSE time (not start)
         series_map = {'BTC': 'KXBTC15M', 'ETH': 'KXETH15M', 'SOL': 'KSOL15M'}
         series = series_map.get(crypto)
         if not series:
@@ -408,13 +417,13 @@ class PureCopyStrategy(BaseStrategy):
         month_map = {1:'JAN', 2:'FEB', 3:'MAR', 4:'APR', 5:'MAY', 6:'JUN',
                     7:'JUL', 8:'AUG', 9:'SEP', 10:'OCT', 11:'NOV', 12:'DEC'}
         
-        year_str = str(window_start.year)[2:]
-        month_str = month_map.get(window_start.month, 'XXX')
-        day_str = f"{window_start.day:02d}"
-        hour_str = f"{window_start.hour:02d}"
-        min_str = f"{window_start.minute:02d}"
+        year_str = str(window_close.year)[2:]
+        month_str = month_map.get(window_close.month, 'XXX')
+        day_str = f"{window_close.day:02d}"
+        hour_str = f"{window_close.hour:02d}"
+        min_str = f"{window_close.minute:02d}"
         
-        return f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}"
+        return f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-30"
     
     async def _lookup_pm_market(self, asset_id: str) -> Optional[Dict]:
         """Look up Polymarket market from asset ID"""
