@@ -303,19 +303,54 @@ class PureCopyStrategy(BaseStrategy):
             logger.info(f"Current window: {window_start.strftime('%H:%M')} - {window_end.strftime('%H:%M')} UTC")
             logger.info(f"EST: {self._get_est_time(window_start)} - {self._get_est_time(window_end)}")
             logger.info(f"Competitors: {', '.join(self.competitors.keys())}")
+            logger.info(f"Poll interval: 10 seconds")
+            logger.info(f"Status: WAITING for competitor trades...")
             logger.info("=" * 70)
             
             # Start background polling
             asyncio.create_task(self._polling_loop())
+        else:
+            logger.debug("PureCopy polling already running")
         
         return []  # No immediate opportunities
     
     async def _polling_loop(self):
         """Background polling loop"""
+        poll_count = 0
         while self._running:
             try:
-                await self.poll_competitors()
+                poll_count += 1
+                window_start, window_end = self._get_current_15m_window()
+                
+                # Log every 6 polls (every minute) to show we're alive
+                if poll_count % 6 == 0:
+                    logger.info(f"📊 PureCopy polling... (cycle #{poll_count})")
+                    logger.info(f"   Current window: {window_start.strftime('%H:%M')} - {window_end.strftime('%H:%M')} UTC")
+                    logger.info(f"   EST: {self._get_est_time(window_start)} - {self._get_est_time(window_end)}")
+                
+                # Poll competitors
+                for name, address in self.competitors.items():
+                    try:
+                        from competitor_tracker import PolymarketTracker
+                        tracker = PolymarketTracker()
+                        activity = tracker.get_user_activity(address, limit=3)
+                        
+                        if activity and poll_count % 6 == 0:
+                            logger.info(f"   👤 {name}: {len(activity)} recent activities")
+                        
+                        for trade in activity:
+                            tx_hash = trade.get('transaction_hash', '')
+                            if tx_hash and tx_hash not in self.seen_trades:
+                                self.seen_trades.add(tx_hash)
+                                logger.info(f"🚨 NEW TRADE from {name}!")
+                                await self._process_competitor_trade(name, trade)
+                                
+                    except Exception as e:
+                        if poll_count % 6 == 0:
+                            logger.debug(f"   Could not poll {name}: {e}")
+                
                 await asyncio.sleep(10)  # Poll every 10 seconds
+                
             except Exception as e:
                 logger.error(f"Polling error: {e}")
                 await asyncio.sleep(10)
