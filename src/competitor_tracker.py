@@ -97,14 +97,14 @@ class PolymarketTracker:
         """
         endpoint = "/activity"
         params = {
-            "address": address,
+            "user": address,
             "limit": limit
         }
         
         data = self._make_request(endpoint, params)
         
         if data:
-            activities = data.get('activities', [])
+            activities = data if isinstance(data, list) else data.get("activities", [])
             logger.info(f"Fetched {len(activities)} activities for {address[:10]}...")
             return activities
         
@@ -121,12 +121,12 @@ class PolymarketTracker:
             List of positions
         """
         endpoint = "/positions"
-        params = {"address": address}
+        params = {"user": address}
         
         data = self._make_request(endpoint, params)
         
         if data:
-            positions = data.get('positions', [])
+            positions = data if isinstance(data, list) else data.get("positions", [])
             logger.info(f"Fetched {len(positions)} positions for {address[:10]}...")
             return positions
         
