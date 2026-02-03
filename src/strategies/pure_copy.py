@@ -165,18 +165,41 @@ class PureCopyStrategy(BaseStrategy):
         pm_slug = trade.get('slug', '')
         pm_title = trade.get('title', '')
         
+        # Debug: log what fields we have
+        logger.debug(f"   Trade fields: slug='{pm_slug}', title='{pm_title}', asset='{asset_id[:20]}...'")
+        
         # Fallback to API lookup if needed
         if not pm_slug:
             pm_market = await self._lookup_pm_market(asset_id)
             if pm_market:
-                pm_slug = pm_market.get('marketSlug', 'Unknown')
-                pm_title = pm_market.get('question', 'Unknown')
+                pm_slug = pm_market.get('marketSlug', '')
+                pm_title = pm_market.get('question', '')
+                logger.debug(f"   API lookup: slug='{pm_slug}', title='{pm_title[:50]}...'")
         
         logger.info(f"   Market: {pm_slug or 'Unknown'}")
         
-        crypto = self._detect_crypto_type(pm_slug, pm_title)
+        # Try to detect from whatever we have
+        crypto = None
+        if pm_slug or pm_title:
+            crypto = self._detect_crypto_type(pm_slug, pm_title)
+        
+        # Last resort: try to detect from asset_id
+        if not crypto and asset_id:
+            crypto = self._detect_crypto_from_asset(asset_id)
+        
         if not crypto:
-            logger.warning(f"   Could not detect crypto type from '{pm_slug}' or '{pm_title}'")
+            logger.warning(f"   Could not detect crypto type from slug='{pm_slug}', title='{pm_title}'")
+            logger.info(f"   Trying all crypto markets as fallback...")
+            # Brute force: try BTC, ETH, SOL markets
+            for try_crypto in ['BTC', 'ETH', 'SOL']:
+                kalshi_ticker = self._generate_kalshi_ticker(try_crypto)
+                if kalshi_ticker:
+                    logger.info(f"   Trying {try_crypto}: {kalshi_ticker}")
+                    success = await self._try_copy_trade(competitor, kalshi_ticker, side, size, price)
+                    if success:
+                        logger.info(f"   ✅ Successfully copied on {try_crypto} market!")
+                        return
+            logger.warning(f"   Could not copy trade on any market")
             return
         
         logger.info(f"   Crypto: {crypto}")
@@ -240,6 +263,13 @@ class PureCopyStrategy(BaseStrategy):
             return 'SOL'
         return None
     
+    def _detect_crypto_from_asset(self, asset_id: str) -> Optional[str]:
+        """Try to detect crypto type from asset ID patterns"""
+        # This is a fallback when slug/title aren't available
+        # Asset IDs are long strings, we can't reliably detect from them
+        # Return None to trigger the brute force approach
+        return None
+    
     async def _lookup_pm_market(self, asset_id: str) -> Optional[Dict]:
         """Look up Polymarket market from asset ID"""
         if asset_id in self.pm_market_cache:
@@ -250,20 +280,26 @@ class PureCopyStrategy(BaseStrategy):
                 url = "https://gamma-api.polymarket.com/markets"
                 params = {"assetId": asset_id}
                 
+                logger.debug(f"   Looking up market for asset: {asset_id[:30]}...")
                 async with session.get(url, params=params, timeout=10) as resp:
+                    logger.debug(f"   API response status: {resp.status}")
                     if resp.status == 200:
                         data = await resp.json()
                         
                         if isinstance(data, list) and data:
                             market = data[0]
                             self.pm_market_cache[asset_id] = market
+                            logger.debug(f"   Found market: {market.get('marketSlug', 'N/A')}")
                             return market
                         elif isinstance(data, dict) and data.get('markets'):
                             market = data['markets'][0]
                             self.pm_market_cache[asset_id] = market
+                            logger.debug(f"   Found market: {market.get('marketSlug', 'N/A')}")
                             return market
+                        else:
+                            logger.debug(f"   API returned empty or unexpected format: {type(data)}")
         except Exception as e:
-            logger.debug(f"Error looking up market: {e}")
+            logger.warning(f"   Error looking up market: {e}")
         
         return None
     
