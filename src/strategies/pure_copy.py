@@ -48,10 +48,23 @@ class PureCopyStrategy(BaseStrategy):
         self.pm_market_cache = {}
         
         # Get actual bankroll from Kalshi
+        self.our_bankroll = 100.0  # Default
         try:
-            balance_data = client.get_balance() if client else {}
-            self.our_bankroll = balance_data.get('balance', 100.0)
-        except:
+            if client and hasattr(client, 'get_balance'):
+                balance_data = client.get_balance()
+                if balance_data and 'balance' in balance_data:
+                    # Balance comes in cents from Kalshi
+                    balance_cents = balance_data.get('balance', 10000)
+                    self.our_bankroll = balance_cents / 100.0
+                    logger.info(f"   Kalshi balance: ${self.our_bankroll:,.2f}")
+                else:
+                    logger.warning("   Could not get balance from Kalshi, using config")
+                    self.our_bankroll = config.get('initial_bankroll', 100.0)
+            else:
+                logger.warning("   No client or get_balance method, using config")
+                self.our_bankroll = config.get('initial_bankroll', 100.0)
+        except Exception as e:
+            logger.warning(f"   Error getting balance: {e}, using config")
             self.our_bankroll = config.get('initial_bankroll', 100.0)
         
         # Start background polling task
@@ -60,7 +73,7 @@ class PureCopyStrategy(BaseStrategy):
         
         logger.info("✅ Pure Copy Strategy initialized")
         logger.info(f"   Tracking {len(self.competitors)} competitors")
-        logger.info(f"   Our bankroll: ${self.our_bankroll:,.2f} (from Kalshi)")
+        logger.info(f"   Our bankroll: ${self.our_bankroll:,.2f}")
     
     def _get_est_time(self, utc_dt: datetime) -> str:
         """Convert UTC to EST for display"""
