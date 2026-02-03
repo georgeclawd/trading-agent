@@ -170,6 +170,12 @@ class PureCopyStrategy(BaseStrategy):
         
         # Parse the Polymarket slug to get crypto and timestamp
         # Format: {crypto}-updown-15m-{unix_timestamp}
+        
+        # FILTER: Only copy 15-minute markets (not hourly/daily)
+        if '-updown-15m-' not in pm_slug:
+            logger.info(f"   Skipping non-15m market: {pm_slug}")
+            return
+        
         kalshi_ticker = self._map_pm_slug_to_kalshi(pm_slug, trade)
         
         if not kalshi_ticker:
