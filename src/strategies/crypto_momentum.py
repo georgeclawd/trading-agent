@@ -375,6 +375,10 @@ class CryptoMomentumStrategy(BaseStrategy):
         
         return executed
     
+    async def _monitor_positions(self):
+        """Monitor existing positions"""
+        pass
+    
     async def continuous_trade_loop(self):
         """Continuous trading loop"""
         logger.info("🔄 Starting CryptoMomentum loop (BTC/ETH/SOL 15M)")
