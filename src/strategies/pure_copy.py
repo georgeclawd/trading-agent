@@ -382,6 +382,16 @@ class PureCopyStrategy(BaseStrategy):
         window_start_minute = (current_minute // 15) * 15
         window_start = now_est.replace(minute=window_start_minute, second=0, microsecond=0)
         
+        # Calculate how far into the window we are
+        minutes_into_window = now_est.minute - window_start_minute
+        seconds_into_window = minutes_into_window * 60 + now_est.second
+        
+        # Markets are typically tradeable for ~10-12 minutes of the 15m window
+        # After that, they close to prepare for settlement
+        if seconds_into_window > 600:  # 10 minutes = 600 seconds
+            logger.info(f"   Market likely closed (window started {seconds_into_window}s ago), skipping")
+            return None
+        
         # Build ticker
         series_map = {'BTC': 'KXBTC15M', 'ETH': 'KXETH15M', 'SOL': 'KSOL15M'}
         series = series_map.get(crypto)
