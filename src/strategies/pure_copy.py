@@ -353,7 +353,7 @@ class PureCopyStrategy(BaseStrategy):
         hour_str = f"{dt_est.hour:02d}"
         min_str = f"{dt_est.minute:02d}"
         
-        kalshi_ticker = f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-00"
+        kalshi_ticker = f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}"
         logger.info(f"   Mapped: {pm_slug} ({dt_utc.strftime('%H:%M')} UTC / {dt_est.strftime('%H:%M')} EST) -> {kalshi_ticker}")
         return kalshi_ticker
     
@@ -407,7 +407,7 @@ class PureCopyStrategy(BaseStrategy):
         hour_str = f"{window_start.hour:02d}"
         min_str = f"{window_start.minute:02d}"
         
-        return f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-00"
+        return f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}"
     
     async def _lookup_pm_market(self, asset_id: str) -> Optional[Dict]:
         """Look up Polymarket market from asset ID"""
