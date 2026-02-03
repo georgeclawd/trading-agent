@@ -410,12 +410,25 @@ class PositionMonitor:
     
     async def execute_exit(self, position_state: PositionState, simulated: bool = False) -> bool:
         """
-        Execute early exit by selling the position.
-        On Kalshi, you close by selling the same side you bought (action: "sell").
+        Execute early exit by hedging the position.
         
-        Example:
-        - Bought YES at 40¢, now trading at 70¢
-        - Sell YES at 70¢ to close (realized profit: 30¢ per contract)
+        Per Kalshi: To sell your position, buy the corresponding amount on the opposite side.
+        - Bought YES at 40c, want to exit -> Buy NO at 60c
+        - Bought NO at 60c, want to exit -> Buy YES at 40c
+        
+        Why this works:
+        - Your position becomes 100 YES and 100 NO (spans all outcomes)
+        - You receive $100 payout regardless of outcome
+        - Your cost was 40c + 60c = $1.00 per contract
+        - Net P&L = $0 per contract (break-even at these prices)
+        
+        Example with profit:
+        - Bought YES at 40c
+        - YES now trading at 70c (NO at 30c)
+        - Buy NO at 30c to exit
+        - Total cost: 40c + 30c = 70c
+        - Payout: $1.00
+        - Profit: 30c per contract
         
         Args:
             position_state: Current state of the position
@@ -425,10 +438,11 @@ class PositionMonitor:
             True if exit executed successfully
         """
         ticker = position_state.ticker
-        side = position_state.side
+        original_side = position_state.side
+        exit_side = 'NO' if original_side == 'YES' else 'YES'
         contracts = int(position_state.contracts)
         
-        # Get current market price (best bid for the side we're selling)
+        # Get current market price for exit side (opposite side)
         try:
             import requests
             import time
@@ -447,7 +461,7 @@ class PositionMonitor:
                 )
                 return base64.b64encode(sig).decode()
             
-            # Get orderbook
+            # Get orderbook for the exit side
             ts = str(int(time.time() * 1000))
             sig = create_sig(ts, "GET", f"/trade-api/v2/markets/{ticker}/orderbook")
             
@@ -469,30 +483,30 @@ class PositionMonitor:
             
             orderbook = resp.json().get('orderbook', {})
             
-            # Get best bid price for the side we're selling (we're selling, so we get the bid)
-            if side == 'YES':
-                bids = orderbook.get('yes', [])
-                if not bids:
-                    logger.error(f"❌ Exit failed: No YES bids for {ticker}")
+            # Get best ask price for exit side (we want to buy)
+            if exit_side == 'YES':
+                asks = orderbook.get('yes', [])
+                if not asks:
+                    logger.error(f"❌ Exit failed: No YES asks for {ticker}")
                     return False
-                exit_price = bids[0][0]  # Best bid
+                exit_price = asks[0][0]  # Best ask
             else:
-                bids = orderbook.get('no', [])
-                if not bids:
-                    logger.error(f"❌ Exit failed: No NO bids for {ticker}")
+                asks = orderbook.get('no', [])
+                if not asks:
+                    logger.error(f"❌ Exit failed: No NO asks for {ticker}")
                     return False
-                exit_price = bids[0][0]  # Best bid
+                exit_price = asks[0][0]  # Best ask
             
             # Calculate realized P&L
-            if side == 'YES':
-                # Bought YES at entry_price, selling at exit_price
-                pnl = (exit_price - position_state.entry_price) * contracts / 100
-            else:  # NO
-                # Bought NO at entry_price, selling at exit_price
-                pnl = (exit_price - position_state.entry_price) * contracts / 100
+            # Total cost = entry_price + exit_price
+            # Payout = 100 cents
+            # Profit = 100 - total_cost
+            total_cost = position_state.entry_price + exit_price
+            profit_per_contract = 100 - total_cost  # in cents
+            pnl = profit_per_contract * contracts / 100  # in dollars
             
             if simulated:
-                logger.info(f"💰 [SIMULATED] Early exit {ticker}: Sell {side} x{contracts} @ {exit_price}c | P&L: ${pnl:+.2f}")
+                logger.info(f"💰 [SIMULATED] Early exit {ticker}: {original_side} position -> Buy {exit_side} x{contracts} @ {exit_price}c | Total cost: {total_cost}c | P&L: ${pnl:+.2f}")
                 
                 # Close position locally
                 self.position_manager.close_position(
@@ -503,18 +517,18 @@ class PositionMonitor:
                 )
                 return True
             
-            # REAL: Place sell order to close position
-            logger.info(f"🔄 [REAL] Early exit {ticker}: Selling {side} x{contracts} @ {exit_price}c | Expected P&L: ${pnl:+.2f}")
+            # REAL: Place order to buy opposite side (this hedges/closes the position)
+            logger.info(f"🔄 [REAL] Early exit {ticker}: Buying {exit_side} x{contracts} @ {exit_price}c to close {original_side} | Expected P&L: ${pnl:+.2f}")
             
-            result = self.kalshi_client.close_position(
+            result = self.kalshi_client.place_order(
                 market_id=ticker,
-                side=side.lower(),
+                side=exit_side.lower(),
                 price=exit_price,
                 count=contracts
             )
             
             if result.get('order_id'):
-                logger.info(f"💰 [REAL] Exit executed {ticker}: Order {result['order_id']} | P&L: ${pnl:+.2f}")
+                logger.info(f"💰 [REAL] Exit executed {ticker}: Order {result['order_id']} | Total cost: {total_cost}c | P&L: ${pnl:+.2f}")
                 
                 # Close position locally
                 self.position_manager.close_position(
