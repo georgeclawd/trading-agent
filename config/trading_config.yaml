@@ -58,15 +58,16 @@ strategies:
     dry_run: true            # Simulated trading
     scan_interval: 1800      # 30 minutes
   crypto_momentum:
-    enabled: true
-    allocation: 0.25         # 25% of capital
-    dry_run: false           # REAL MONEY
-    scan_interval: 300       # 5 minutes (15-min markets need faster)
+    enabled: false           # DISABLED - Lost 52% of bankroll
+    allocation: 0.00
+    dry_run: true            # Keep as simulation only
+    scan_interval: 300
   longshot_weather:
     enabled: true
-    allocation: 0.25         # 25% of capital - $64K bot algorithm
-    dry_run: true            # Simulated trading
+    allocation: 0.50         # 50% of capital - our best performing strategy
+    dry_run: false           # REAL TRADING - buying cheap NOs at 1c
     scan_interval: 1800      # 30 minutes
+    max_position_size: 3     # Reduced from 5 to 3 (smaller bankroll)
 
 # Logging
 log_level: INFO
