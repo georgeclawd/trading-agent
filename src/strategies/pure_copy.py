@@ -190,10 +190,17 @@ class PureCopyStrategy(BaseStrategy):
         
         logger.info(f"   Kalshi Ticker: {kalshi_ticker}")
         
-        # Check if market is still open
+        # Check if market is still open and has liquidity
         orderbook = self.client.get_orderbook(kalshi_ticker)
         if not orderbook:
-            logger.info(f"   Market {kalshi_ticker} is closed or not found, skipping")
+            logger.info(f"   Market {kalshi_ticker} not found, skipping")
+            return
+        
+        # Check if orderbook has actual bids/offers (not null)
+        yes_bids = orderbook.get('orderbook', {}).get('yes')
+        no_bids = orderbook.get('orderbook', {}).get('no')
+        if yes_bids is None and no_bids is None:
+            logger.info(f"   Market {kalshi_ticker} has no liquidity (closed), skipping")
             return
         
         # Determine side - for BUY/SELL
