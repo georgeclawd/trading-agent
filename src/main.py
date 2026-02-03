@@ -226,6 +226,9 @@ class TradingAgent:
                     position_manager=self.position_manager
                 )
                 allocation = pure_copy_cfg.get('allocation', 0.50)
+                # Ensure allocation is a fraction (0.0-1.0), not percentage
+                if allocation > 1.0:
+                    allocation = allocation / 100.0
                 self.strategy_manager.register_strategy(pure_copy_strategy, allocation)
                 logger.info("✅ Pure Copy strategy registered - copying competitor trades")
         
@@ -318,9 +321,12 @@ class TradingAgent:
         strategy_tasks = []
         for strategy in self.strategy_manager.strategies:
             logger.info(f"🔄 Starting loop for {strategy.name}...")
-            task = asyncio.create_task(self._strategy_loop(strategy))
-            strategy_tasks.append(task)
-            logger.info(f"✅ Started {strategy.name} loop task")
+            try:
+                task = asyncio.create_task(self._run_strategy_with_error_handling(strategy))
+                strategy_tasks.append(task)
+                logger.info(f"✅ Created task for {strategy.name}")
+            except Exception as e:
+                logger.error(f"❌ Failed to create task for {strategy.name}: {e}", exc_info=True)
         
         # Keep main loop alive
         while self.running:
@@ -340,6 +346,15 @@ class TradingAgent:
         price_fetcher_task.cancel()
         for task in strategy_tasks:
             task.cancel()
+    
+    async def _run_strategy_with_error_handling(self, strategy):
+        """Wrapper to catch errors in strategy loops"""
+        try:
+            logger.info(f"🛡️ Error handler started for {strategy.name}")
+            await self._strategy_loop(strategy)
+            logger.info(f"🛡️ Error handler completed for {strategy.name}")
+        except Exception as e:
+            logger.error(f"💥 CRITICAL ERROR in {strategy.name} loop: {e}", exc_info=True)
     
     async def _strategy_loop(self, strategy):
         """Run a single strategy in its own loop with its own interval"""
