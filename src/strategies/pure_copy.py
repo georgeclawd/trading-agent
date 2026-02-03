@@ -161,22 +161,22 @@ class PureCopyStrategy(BaseStrategy):
         logger.info(f"   Size: ${size:.2f}")
         logger.info(f"   Price: {price:.0%}")
         
-        pm_market = await self._lookup_pm_market(asset_id)
+        # Try to detect crypto from trade data directly (faster than API lookup)
+        pm_slug = trade.get('slug', '')
+        pm_title = trade.get('title', '')
         
-        if not pm_market:
-            for crypto in ['BTC', 'ETH', 'SOL']:
-                kalshi_ticker = self._generate_kalshi_ticker(crypto)
-                if kalshi_ticker:
-                    await self._try_copy_trade(competitor, kalshi_ticker, side, size, price)
-            return
+        # Fallback to API lookup if needed
+        if not pm_slug:
+            pm_market = await self._lookup_pm_market(asset_id)
+            if pm_market:
+                pm_slug = pm_market.get('marketSlug', 'Unknown')
+                pm_title = pm_market.get('question', 'Unknown')
         
-        pm_slug = pm_market.get('marketSlug', 'Unknown')
-        pm_question = pm_market.get('question', 'Unknown')
-        logger.info(f"   Market: {pm_slug}")
+        logger.info(f"   Market: {pm_slug or 'Unknown'}")
         
-        crypto = self._detect_crypto_type(pm_slug, pm_question)
+        crypto = self._detect_crypto_type(pm_slug, pm_title)
         if not crypto:
-            logger.warning(f"   Could not detect crypto type")
+            logger.warning(f"   Could not detect crypto type from '{pm_slug}' or '{pm_title}'")
             return
         
         logger.info(f"   Crypto: {crypto}")
@@ -347,6 +347,10 @@ class PureCopyStrategy(BaseStrategy):
                                 if tx_hash:
                                     if tx_hash in self.seen_trades:
                                         logger.debug(f"      Skipping seen trade: {tx_hash[:20]}...")
+                                    elif trade_type != 'TRADE':
+                                        # Skip REDEEM, ORDER_CREATED, etc - only copy actual trades
+                                        logger.debug(f"      Skipping non-trade activity: {trade_type}")
+                                        self.seen_trades.add(tx_hash)  # Mark as seen so we don't re-log
                                     else:
                                         logger.info(f"🚨 NEW TRADE from {name}! Type: {trade_type}")
                                         logger.info(f"      Tx: {tx_hash[:30]}...")
