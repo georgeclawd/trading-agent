@@ -427,7 +427,7 @@ class PureCopyStrategy(BaseStrategy):
         hour_str = f"{window_close.hour:02d}"
         min_str = f"{window_close.minute:02d}"
         
-        return f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}"
+        return f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-30"
     
     async def _lookup_pm_market(self, asset_id: str) -> Optional[Dict]:
         """Look up Polymarket market from asset ID"""
