@@ -739,9 +739,37 @@ class CryptoMomentumStrategy(BaseStrategy):
             'candles_collected': {a: len(i['candles']) for a, i in self.assets.items()}
         }
     
+    def get_current_exposure(self) -> float:
+        """Calculate total exposure from open positions"""
+        if not self.position_manager:
+            return 0.0
+        
+        open_positions = self.position_manager.get_open_positions(
+            strategy=self.name,
+            simulated=self.dry_run
+        )
+        
+        total_exposure = 0.0
+        for pos in open_positions:
+            exposure = pos.contracts * pos.entry_price / 100
+            total_exposure += exposure
+        
+        return total_exposure
+    
     async def execute(self, opportunities: List[Dict]) -> int:
         """Execute trades based on opportunities"""
         executed_count = 0
+        
+        # Risk management: Check total exposure
+        current_exposure = self.get_current_exposure()
+        max_exposure = self.config.get('max_bankroll_exposure', 0.3) * self.config.get('initial_bankroll', 100)
+        
+        if current_exposure >= max_exposure:
+            logger.warning(f"🛑 CryptoMomentum: Max exposure reached (${current_exposure:.2f}/${max_exposure:.2f}). Skipping new trades.")
+            return 0
+        
+        remaining_exposure_budget = max_exposure - current_exposure
+        logger.info(f"💰 CryptoMomentum: Current exposure ${current_exposure:.2f}, budget ${remaining_exposure_budget:.2f}")
         
         for opp in opportunities:
             ticker = opp['ticker']
@@ -759,6 +787,14 @@ class CryptoMomentumStrategy(BaseStrategy):
             # Limit order at fair price
             limit_price = int(opp['fair_probability'] * 100)
             limit_price = max(1, min(99, limit_price))
+            
+            # Calculate trade cost
+            trade_cost = contracts * limit_price / 100
+            
+            # Check exposure budget
+            if trade_cost > remaining_exposure_budget:
+                logger.warning(f"🛑 CryptoMomentum: Trade ${trade_cost:.2f} exceeds remaining budget ${remaining_exposure_budget:.2f}. Skipping.")
+                continue
             
             # Check for duplicate BEFORE executing
             if self.position_manager and self.position_manager.has_open_position(ticker, simulated=self.dry_run):
@@ -792,6 +828,9 @@ class CryptoMomentumStrategy(BaseStrategy):
                     if result.get('order_id'):
                         logger.info(f"CryptoMomentum: [REAL] Executed {asset} - {ticker} Order: {result['order_id']}")
                         executed_count += 1
+                        
+                        # Deduct from exposure budget
+                        remaining_exposure_budget -= trade_cost
                         
                         self.record_position(
                             ticker=ticker,
