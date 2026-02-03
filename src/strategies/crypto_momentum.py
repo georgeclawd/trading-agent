@@ -392,25 +392,54 @@ class CryptoMomentumStrategy(BaseStrategy):
             logger.info(f"   • Remaining time: {remaining_minutes} minutes")
             logger.info(f"   • Model prediction: {'BULLISH' if model_up > model_down else 'BEARISH' if model_down > model_up else 'NEUTRAL'}")
             
-            # Get market data
+            # Get market data - filter for currently active markets only
+            markets = []
             try:
+                logger.info(f"📡 Fetching markets from Kalshi (series: {info['series']})...")
                 response = self.client._request("GET", f"/markets?series_ticker={info['series']}&status=open")
-                markets = response.json().get('markets', [])
+                all_markets = response.json().get('markets', [])
+                
+                # Filter to only markets that are OPEN NOW (between open_time and close_time)
+                now = datetime.now()
+                for m in all_markets:
+                    open_time_str = m.get('open_time', '')
+                    close_time_str = m.get('close_time', '')
+                    if open_time_str and close_time_str:
+                        try:
+                            # Parse times
+                            open_time = datetime.fromisoformat(open_time_str.replace('Z', '+00:00').replace('+00:00', ''))
+                            close_time = datetime.fromisoformat(close_time_str.replace('Z', '+00:00').replace('+00:00', ''))
+                            
+                            # Check if market is currently open for trading
+                            is_open = open_time <= now < close_time
+                            minutes_until_close = (close_time - now).total_seconds() / 60
+                            
+                            if is_open:
+                                markets.append(m)
+                                logger.info(f"   🎯 OPEN market: {m['ticker']} (closes in {minutes_until_close:.0f} min)")
+                        except Exception as e:
+                            logger.debug(f"   Could not parse times for {m['ticker']}: {e}")
+                
+                logger.info(f"📊 Found {len(markets)} ACTIVE markets (from {len(all_markets)} total open)")
             except Exception as e:
+                logger.error(f"❌ Failed to fetch markets: {e}")
                 continue
             
             for market in markets:
                 ticker = market['ticker']
                 
                 try:
+                    logger.info(f"📡 Fetching orderbook for {ticker}...")
                     orderbook = self.client.get_orderbook(ticker)
                     if not orderbook or 'orderbook' not in orderbook:
+                        logger.warning(f"⚠️  No orderbook data for {ticker}")
                         continue
                     
                     yes_bids = orderbook['orderbook'].get('yes', [])
                     no_bids = orderbook['orderbook'].get('no', [])
                     
                     if not yes_bids or not no_bids:
+                        logger.info(f"   ⏸️  {ticker}: Empty orderbook (no bids)")
                         continue
                     
                     # Get prices
@@ -420,6 +449,7 @@ class CryptoMomentumStrategy(BaseStrategy):
                     # Calculate market probabilities (normalize)
                     total = yes_price + no_price
                     if total <= 0:
+                        logger.info(f"   ⏸️  {ticker}: Invalid prices (total <= 0)")
                         continue
                     
                     market_up = yes_price / total
@@ -446,18 +476,21 @@ class CryptoMomentumStrategy(BaseStrategy):
                         best_model = model_down
                         entry_price = no_price
                     
+                    # Log edge calculation for first few markets
+                    logger.info(f"   📊 {ticker}: {best_side} | Edge={best_edge:+.1%} | Model={best_model:.0%} | Market={entry_price:.0%} | Threshold={threshold:.0%}")
+                    
                     # FIXED: Check threshold AND min probability
                     if best_edge < threshold:
-                        logger.debug(f"{ticker}: Edge {best_edge:.2%} below threshold {threshold}")
+                        logger.info(f"   ⏸️  {ticker}: Edge {best_edge:.2%} below threshold {threshold:.0%}")
                         continue
                     
                     if best_model < min_prob:
-                        logger.debug(f"{ticker}: Model prob {best_model:.2%} below min {min_prob}")
+                        logger.info(f"   ⏸️  {ticker}: Model prob {best_model:.2%} below min {min_prob:.0%}")
                         continue
                     
                     # Don't buy if price is too high (>60c)
                     if entry_price > 0.60:
-                        logger.debug(f"{ticker}: Entry price {entry_price:.0%} too high")
+                        logger.info(f"   ⏸️  {ticker}: Entry price {entry_price:.0%} too high (>60%)")
                         continue
                     
                     opportunities.append({
@@ -483,7 +516,10 @@ class CryptoMomentumStrategy(BaseStrategy):
                     logger.info(f"   • Phase: {phase} ({remaining_minutes} min left)")
                     
                 except Exception as e:
+                    logger.warning(f"⚠️  Error analyzing {ticker}: {e}")
                     continue
+            
+            logger.info(f"📊 Analyzed {len(markets)} markets, found {len(opportunities)} opportunities")
         
         return opportunities
     
