@@ -346,7 +346,8 @@ class TradingAgent:
             'WeatherPrediction': 'weather_prediction',
             'SpreadTrading': 'spread_trading',
             'CryptoMomentum': 'crypto_momentum',
-            'LongshotWeather': 'longshot_weather'
+            'LongshotWeather': 'longshot_weather',
+            'PureCopy': 'pure_copy'
         }
         config_key = name_to_key.get(strategy.name, strategy.name.lower())
         strategy_config = self.config.get('strategies', {}).get(config_key, {})
@@ -355,16 +356,19 @@ class TradingAgent:
         # Convert interval to minutes for display
         interval_min = interval // 60
         
-        # For CryptoMomentum, use continuous trading loop (not discrete cycles)
-        if strategy.name == "CryptoMomentum":
+        # For strategies with continuous loops, use their own loop
+        if strategy.name in ["CryptoMomentum", "PureCopy"]:
             await self._run_crypto_momentum_loop(strategy)
         else:
             await self._run_strategy_loop(strategy, interval, interval_min)
     
     async def _run_crypto_momentum_loop(self, strategy):
-        """Run CryptoMomentum in continuous trading mode"""
-        logger.info(f"🚀 Starting CryptoMomentum continuous trading - {format_est()}")
-        logger.info("📈 Trading every minute within 15-min windows (not just at start)")
+        """Run strategy in continuous trading mode"""
+        logger.info(f"🚀 Starting {strategy.name} continuous trading - {format_est()}")
+        if strategy.name == "CryptoMomentum":
+            logger.info("📈 Trading every minute within 15-min windows")
+        elif strategy.name == "PureCopy":
+            logger.info("👥 Copying competitor trades in real-time")
         
         # Run the strategy's continuous loop
         await strategy.continuous_trade_loop()
