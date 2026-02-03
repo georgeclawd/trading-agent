@@ -2,16 +2,16 @@
 Pure Copy Trading Strategy - Copy competitor trades exactly
 
 Translates Polymarket trades to Kalshi equivalents in real-time
+Uses CURRENT 15-minute markets based on time
 """
 
 import asyncio
 import json
 import logging
 from typing import Dict, List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from strategy_framework import BaseStrategy
 import aiohttp
-import subprocess
 
 logger = logging.getLogger('PureCopyTrading')
 
@@ -19,7 +19,7 @@ logger = logging.getLogger('PureCopyTrading')
 class PureCopyStrategy(BaseStrategy):
     """
     Pure copy trading - When competitors trade on Polymarket,
-    we copy immediately on Kalshi
+    we copy immediately on Kalshi using CURRENT markets
     """
     
     def __init__(self, config: Dict, client, position_manager=None):
@@ -33,21 +33,92 @@ class PureCopyStrategy(BaseStrategy):
             'k9Q2mX4L8A7ZP3R': '0xd0d6053c3c37e727402d84c14069780d360993aa',
         }
         
+        # Get competitor bankroll estimates (from observed profits)
+        self.competitor_bankrolls = {
+            'distinct-baguette': 6800,   # $6.8k profit today
+            '0x8dxd': 47000,             # $47k profit today
+            'k9Q2mX4L8A7ZP3R': 51000,    # $51k profit today
+        }
+        
         # Track last seen trades to avoid duplicates
         self.seen_trades = set()
         
         # Market cache
         self.pm_market_cache = {}
-        self.kalshi_market_cache = {}
+        
+        # Our bankroll
+        self.our_bankroll = config.get('initial_bankroll', 100.0)
         
         logger.info("✅ Pure Copy Strategy initialized")
         logger.info(f"   Tracking {len(self.competitors)} competitors")
+        logger.info(f"   Our bankroll: ${self.our_bankroll:,.2f}")
     
     def _get_est_time(self, utc_dt: datetime) -> str:
         """Convert UTC to EST for display"""
-        from datetime import timedelta
         est = utc_dt - timedelta(hours=5)  # UTC-5 for EST
         return est.strftime('%I:%M %p EST')
+    
+    def _get_current_15m_window(self) -> tuple:
+        """
+        Get the current 15-minute window
+        Returns: (window_start, window_end) as UTC datetimes
+        """
+        now = datetime.now(timezone.utc)
+        
+        # Find the start of current 15-min window
+        # Windows start at :00, :15, :30, :45
+        minute = now.minute
+        window_start_minute = (minute // 15) * 15
+        
+        window_start = now.replace(minute=window_start_minute, second=0, microsecond=0)
+        window_end = window_start + timedelta(minutes=15)
+        
+        return window_start, window_end
+    
+    def _generate_kalshi_ticker(self, crypto: str, timestamp: int = None) -> str:
+        """
+        Generate Kalshi ticker for CURRENT 15-min window
+        
+        Args:
+            crypto: 'BTC', 'ETH', or 'SOL'
+            timestamp: Optional specific timestamp (if not provided, uses current time)
+        """
+        if timestamp:
+            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        else:
+            # Use current 15-min window
+            window_start, _ = self._get_current_15m_window()
+            dt = window_start
+        
+        # Map to series
+        series_map = {
+            'BTC': 'KXBTC15M',
+            'ETH': 'KXETH15M',
+            'SOL': 'KSOL15M',
+        }
+        
+        if crypto not in series_map:
+            return None
+        
+        series = series_map[crypto]
+        
+        # Format: YY MMM DD HHMM
+        month_map = {
+            1: 'JAN', 2: 'FEB', 3: 'MAR', 4: 'APR',
+            5: 'MAY', 6: 'JUN', 7: 'JUL', 8: 'AUG',
+            9: 'SEP', 10: 'OCT', 11: 'NOV', 12: 'DEC'
+        }
+        
+        year_str = str(dt.year)[2:]  # Last 2 digits
+        month_str = month_map.get(dt.month, 'XXX')
+        day_str = f"{dt.day:02d}"
+        hour_str = f"{dt.hour:02d}"
+        min_str = f"{dt.minute:02d}"
+        
+        # Strike is 00 for up/down markets
+        strike = "00"
+        
+        return f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-{strike}"
     
     async def poll_competitors(self):
         """Poll Polymarket for competitor trades"""
@@ -95,52 +166,116 @@ class PureCopyStrategy(BaseStrategy):
         utc_str = trade_time.strftime('%H:%M UTC')
         est_str = self._get_est_time(trade_time)
         
+        # Get current 15-min window
+        window_start, window_end = self._get_current_15m_window()
+        
         logger.info("=" * 70)
         logger.info(f"🚨 {competitor} TRADED! ({utc_str} / {est_str})")
+        logger.info(f"   Current 15-min window: {window_start.strftime('%H:%M')} - {window_end.strftime('%H:%M')} UTC")
         logger.info("=" * 70)
         logger.info(f"   Side: {side}")
         logger.info(f"   Size: ${size:.2f}")
         logger.info(f"   Price: {price:.0%}")
-        logger.info(f"   Asset: {asset_id[:40]}...")
         
-        # Look up Polymarket market
+        # Look up Polymarket market to identify crypto type
         pm_market = await self._lookup_pm_market(asset_id)
         
         if not pm_market:
-            logger.warning("   Could not identify Polymarket market")
+            # Try to infer from asset_id or use current time
+            logger.warning("   Could not identify market, trying BTC/ETH/SOL current windows")
+            # Try all three and see which has liquidity
+            for crypto in ['BTC', 'ETH', 'SOL']:
+                kalshi_ticker = self._generate_kalshi_ticker(crypto)
+                if kalshi_ticker:
+                    await self._try_copy_trade(competitor, kalshi_ticker, side, size, price)
             return
         
         pm_slug = pm_market.get('marketSlug', 'Unknown')
         pm_question = pm_market.get('question', 'Unknown')
         
         logger.info(f"   Market: {pm_slug}")
-        logger.info(f"   Question: {pm_question[:60]}...")
         
-        # Find Kalshi equivalent
-        kalshi_ticker = self._find_kalshi_equivalent(pm_slug, pm_question)
+        # Determine crypto type from market
+        crypto = self._detect_crypto_type(pm_slug, pm_question)
         
-        if not kalshi_ticker:
-            logger.warning("   No Kalshi equivalent found")
+        if not crypto:
+            logger.warning(f"   Could not detect crypto type from: {pm_slug}")
             return
         
-        logger.info(f"   Kalshi: {kalshi_ticker}")
+        logger.info(f"   Crypto: {crypto}")
+        
+        # Generate Kalshi ticker for CURRENT 15-min window
+        kalshi_ticker = self._generate_kalshi_ticker(crypto)
+        
+        if not kalshi_ticker:
+            logger.error("   Could not generate Kalshi ticker")
+            return
+        
+        logger.info(f"   Kalshi (current window): {kalshi_ticker}")
         
         # Determine side for Kalshi
-        # Polymarket: BUY = buying YES, SELL = selling YES (buying NO)
         if side == 'BUY':
             kalshi_side = 'YES'
         else:
             kalshi_side = 'NO'
         
-        # Calculate copy size (proportional)
-        # Base: $10 per $100 they trade
-        copy_size = max(1, int(size / 10))
-        copy_size = min(copy_size, 10)  # Max 10 contracts
+        # Calculate copy size based on bankroll ratio
+        competitor_bankroll = self.competitor_bankrolls.get(competitor, 50000)  # Default $50k
+        bankroll_ratio = self.our_bankroll / competitor_bankroll
         
-        logger.info(f"   Copying: {kalshi_side} x{copy_size} contracts")
+        # Their size in contracts (approximate)
+        their_contracts = max(1, int(size / price / 10))  # Rough estimate
+        
+        # Our copy size
+        copy_contracts = max(1, int(their_contracts * bankroll_ratio))
+        copy_contracts = min(copy_contracts, 10)  # Cap at 10
+        
+        logger.info(f"   Sizing: They have ${competitor_bankroll:,.0f}, we have ${self.our_bankroll:,.0f}")
+        logger.info(f"   Ratio: {bankroll_ratio:.1%}")
+        logger.info(f"   They traded ~{their_contracts} contracts")
+        logger.info(f"   We copy: {copy_contracts} contracts")
+        logger.info(f"   Copying: {kalshi_side} x{copy_contracts}")
         
         # Execute copy trade
-        await self._execute_copy(kalshi_ticker, kalshi_side, copy_size, price)
+        await self._execute_copy(kalshi_ticker, kalshi_side, copy_contracts, price)
+    
+    async def _try_copy_trade(self, ticker: str, side: str, size: float, price: float):
+        """Try to copy trade on a specific ticker"""
+        try:
+            # Check if market exists and has liquidity
+            orderbook = self.client.get_orderbook(ticker)
+            if not orderbook or 'orderbook' not in orderbook:
+                return False
+            
+            yes_bids = orderbook['orderbook'].get('yes', [])
+            no_bids = orderbook['orderbook'].get('no', [])
+            
+            if not yes_bids or not no_bids:
+                return False
+            
+            # Market exists, execute trade
+            kalshi_side = 'YES' if side == 'BUY' else 'NO'
+            contracts = min(max(1, int(size / 10)), 5)  # Conservative sizing
+            
+            await self._execute_copy(ticker, kalshi_side, contracts, price)
+            return True
+            
+        except Exception as e:
+            logger.debug(f"Could not trade {ticker}: {e}")
+            return False
+    
+    def _detect_crypto_type(self, slug: str, question: str) -> Optional[str]:
+        """Detect if market is BTC, ETH, or SOL"""
+        text = (slug + " " + question).lower()
+        
+        if 'btc' in text or 'bitcoin' in text:
+            return 'BTC'
+        elif 'eth' in text or 'ethereum' in text:
+            return 'ETH'
+        elif 'sol' in text or 'solana' in text:
+            return 'SOL'
+        
+        return None
     
     async def _lookup_pm_market(self, asset_id: str) -> Optional[Dict]:
         """Look up Polymarket market from asset ID"""
@@ -169,66 +304,6 @@ class PureCopyStrategy(BaseStrategy):
         
         return None
     
-    def _find_kalshi_equivalent(self, pm_slug: str, pm_question: str) -> Optional[str]:
-        """
-        Map Polymarket market to Kalshi ticker
-        
-        Examples:
-        - btc-updown-15m-1770147900 -> KXBTC15M-YYMMDDHHMM-XX
-        - eth-updown-15m-1770147900 -> KXETH15M-YYMMDDHHMM-XX
-        """
-        import re
-        from datetime import datetime
-        
-        slug_lower = pm_slug.lower()
-        
-        # Extract crypto type and timestamp
-        # Format: btc-updown-15m-1770147900
-        match = re.search(r'(btc|eth|sol)-updown-15m-(\d+)', slug_lower)
-        
-        if not match:
-            logger.debug(f"Could not parse slug: {pm_slug}")
-            return None
-        
-        crypto = match.group(1).upper()
-        timestamp = int(match.group(2))
-        
-        # Convert timestamp to datetime
-        dt = datetime.fromtimestamp(timestamp)
-        
-        # Map to Kalshi format
-        crypto_map = {
-            'BTC': 'KXBTC15M',
-            'ETH': 'KXETH15M', 
-            'SOL': 'KSOL15M',
-        }
-        
-        if crypto not in crypto_map:
-            return None
-        
-        series = crypto_map[crypto]
-        
-        # Format: YY MMM DD HHMM
-        # Example: 26FEB031500
-        month_map = {
-            1: 'JAN', 2: 'FEB', 3: 'MAR', 4: 'APR',
-            5: 'MAY', 6: 'JUN', 7: 'JUL', 8: 'AUG',
-            9: 'SEP', 10: 'OCT', 11: 'NOV', 12: 'DEC'
-        }
-        
-        year_str = str(dt.year)[2:]  # Last 2 digits
-        month_str = month_map.get(dt.month, 'XXX')
-        day_str = f"{dt.day:02d}"
-        hour_str = f"{dt.hour:02d}"
-        min_str = f"{dt.minute:02d}"
-        
-        # For up/down markets, the strike is typically 00
-        strike = "00"
-        
-        kalshi_ticker = f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-{strike}"
-        
-        return kalshi_ticker
-    
     async def _execute_copy(self, ticker: str, side: str, size: int, price: float):
         """Execute the copy trade on Kalshi"""
         try:
@@ -256,10 +331,17 @@ class PureCopyStrategy(BaseStrategy):
     
     async def continuous_trade_loop(self):
         """Main loop - poll competitors frequently"""
-        logger.info("🔄 Pure Copy Strategy: Starting")
-        logger.info(f"   Poll interval: 10 seconds")
-        logger.info(f"   Competitors: {', '.join(self.competitors.keys())}")
-        logger.info(f"   Display: EST (UTC-5)")
+        window_start, window_end = self._get_current_15m_window()
+        
+        logger.info("=" * 70)
+        logger.info("🔄 PURE COPY STRATEGY STARTED")
+        logger.info("=" * 70)
+        logger.info(f"Current 15-min window: {window_start.strftime('%H:%M')} - {window_end.strftime('%H:%M')} UTC")
+        logger.info(f"EST time: {self._get_est_time(window_start)} - {self._get_est_time(window_end)}")
+        logger.info(f"Poll interval: 10 seconds")
+        logger.info(f"Competitors: {', '.join(self.competitors.keys())}")
+        logger.info(f"Our bankroll: ${self.our_bankroll:,.2f}")
+        logger.info("=" * 70)
         
         while True:
             try:
@@ -289,5 +371,19 @@ if __name__ == "__main__":
     print("Pure Copy Trading Strategy")
     print("=" * 70)
     print("Copies competitor trades from Polymarket to Kalshi")
+    print("Uses CURRENT 15-minute markets based on time")
+    print("Sizes relative to bankroll, not their bet size")
     print("Times displayed in EST (UTC-5)")
     print("=" * 70)
+    
+    # Test current window
+    strategy = PureCopyStrategy({'initial_bankroll': 100}, None)
+    start, end = strategy._get_current_15m_window()
+    print(f"\nCurrent 15-min window:")
+    print(f"  UTC: {start.strftime('%H:%M')} - {end.strftime('%H:%M')}")
+    print(f"  EST: {strategy._get_est_time(start)} - {strategy._get_est_time(end)}")
+    
+    # Test ticker generation
+    for crypto in ['BTC', 'ETH', 'SOL']:
+        ticker = strategy._generate_kalshi_ticker(crypto)
+        print(f"  {crypto}: {ticker}")

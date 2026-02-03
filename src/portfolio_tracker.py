@@ -36,11 +36,15 @@ class PortfolioTracker:
     
     def _load_bankroll(self) -> float:
         """Load current bankroll"""
+        # Get initial bankroll from config (top level or bot section)
+        initial = self.config.get('initial_bankroll', 
+                                  self.config.get('bot', {}).get('initial_bankroll', 100.0))
+        
         if self.bankroll_file.exists():
             with open(self.bankroll_file) as f:
                 data = json.load(f)
-                return data.get('current', self.config['initial_bankroll'])
-        return self.config['initial_bankroll']
+                return data.get('current', initial)
+        return initial
     
     def _save_bankroll(self):
         """Save bankroll"""

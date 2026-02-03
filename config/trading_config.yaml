@@ -1,12 +1,13 @@
 # Trading Configuration
 
+initial_bankroll: 100.0
+
 bot:
   name: "Copy Trading Bot"
   dry_run: false  # LIVE TRADING
   check_interval: 10
   timezone: "UTC"  # Internal timezone
   display_timezone: "EST"  # Display for user (UTC-5)
-  initial_bankroll: 100.0
 
 strategies:
   crypto_momentum:
