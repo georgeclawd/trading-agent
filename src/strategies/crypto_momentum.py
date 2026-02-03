@@ -14,6 +14,7 @@ import os
 
 logger = logging.getLogger('CryptoMomentum')
 from position_monitor import PositionMonitor
+from consensus_tracker import ConsensusTracker
 
 def clamp(value, min_val, max_val):
     """Clamp value between min and max"""
@@ -32,6 +33,10 @@ class CryptoMomentumStrategy(BaseStrategy):
             self.position_monitor = PositionMonitor(position_manager, kalshi_client=client)
         else:
             self.position_monitor = None
+        
+        # Initialize consensus tracker
+        self.consensus_tracker = ConsensusTracker()
+        logger.info("✅ Consensus tracking enabled - comparing with competitor bots")
         
         # Assets
         self.assets = {
@@ -464,8 +469,18 @@ class CryptoMomentumStrategy(BaseStrategy):
         return opportunities
     
     async def execute(self, opportunities: List[Dict]) -> int:
-        """Execute trades"""
+        """Execute trades with consensus validation"""
         executed = 0
+        
+        # Get competitor consensus
+        logger.info("🤝 Checking competitor consensus...")
+        try:
+            consensus = self.consensus_tracker.get_competitor_consensus()
+            logger.info(f"📊 Consensus: {consensus['bullish_count']} bullish, {consensus['bearish_count']} bearish, {consensus['neutral_count']} neutral")
+            logger.info(f"📊 Consensus side: {consensus['consensus_side']} ({consensus['agreement_ratio']:.0%} agreement)")
+        except Exception as e:
+            logger.warning(f"Could not get consensus: {e}")
+            consensus = None
         
         for opp in opportunities:
             ticker = opp['ticker']
