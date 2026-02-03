@@ -370,7 +370,8 @@ class TradingAgent:
         }
         config_key = name_to_key.get(strategy.name, strategy.name.lower())
         strategy_config = self.config.get('strategies', {}).get(config_key, {})
-        interval = strategy_config.get('scan_interval', self.config['scan_interval'])
+        # Use 300 seconds (5 min) as default if not specified
+        interval = strategy_config.get('scan_interval', self.config.get('scan_interval', 300))
         
         # Convert interval to minutes for display
         interval_min = interval // 60
