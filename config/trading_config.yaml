@@ -4,6 +4,10 @@
 initial_bankroll: 100.0
 currency: USDC
 
+# Trading Mode
+demo_mode: true              # Use Kalshi demo/paper trading environment
+                            # Set to false for real money trading
+
 # Risk Management
 max_position_size: 5.0       # Max $5 per trade (absolute dollars)
 daily_loss_limit: 0.20       # Stop trading after 20% daily loss
@@ -48,26 +52,26 @@ discord:
 # Strategy Configuration
 strategies:
   weather_prediction:
-    enabled: true
-    allocation: 0.25         # 25% of capital
-    dry_run: true            # Simulated trading
-    scan_interval: 1800      # 30 minutes
+    enabled: false           # Disabled for paper trading test
+    allocation: 0.00
+    dry_run: true
+    scan_interval: 1800
   spread_trading:
-    enabled: true
-    allocation: 0.25         # 25% of capital
-    dry_run: true            # Simulated trading
-    scan_interval: 1800      # 30 minutes
+    enabled: false           # Disabled for paper trading test
+    allocation: 0.00
+    dry_run: true
+    scan_interval: 1800
   crypto_momentum:
     enabled: false           # DISABLED - Lost 52% of bankroll
     allocation: 0.00
-    dry_run: true            # Keep as simulation only
+    dry_run: true
     scan_interval: 300
   longshot_weather:
     enabled: true
-    allocation: 0.50         # 50% of capital - our best performing strategy
-    dry_run: false           # REAL TRADING - buying cheap NOs at 1c
+    allocation: 1.00         # 100% for paper trading test
+    dry_run: false           # Will trade on demo environment
     scan_interval: 1800      # 30 minutes
-    max_position_size: 3     # Reduced from 5 to 3 (smaller bankroll)
+    max_position_size: 5     # Normal position size for testing
 
 # Logging
 log_level: INFO

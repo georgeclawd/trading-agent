@@ -21,11 +21,14 @@ class KalshiClient:
     """
     
     BASE_URL = "https://api.elections.kalshi.com"
+    DEMO_URL = "https://demo-api.kalshi.co"
     API_PREFIX = "/trade-api/v2"
     
-    def __init__(self, api_key_id: str, api_key: str):
+    def __init__(self, api_key_id: str, api_key: str, demo: bool = False):
         self.api_key_id = api_key_id
         self.api_key = api_key
+        self.demo = demo
+        self.base_url = self.DEMO_URL if demo else self.BASE_URL
         self._session = requests.Session()
         self._private_key = None
         self._load_private_key()
@@ -80,7 +83,7 @@ class KalshiClient:
         """Make authenticated request"""
         # Full path includes API_PREFIX for signature
         full_path = f"{self.API_PREFIX}{endpoint}"
-        url = f"{self.BASE_URL}{full_path}"
+        url = f"{self.base_url}{full_path}"
         
         timestamp = str(int(time.time() * 1000))
         signature = self._create_signature(timestamp, method, full_path)

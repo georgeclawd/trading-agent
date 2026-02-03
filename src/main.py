@@ -128,17 +128,35 @@ class TradingAgent:
         import subprocess
         from kalshi_client import KalshiClient
         
-        api_key_id = subprocess.run(
-            ['pass', 'show', 'kalshi/api_key_id'],
-            capture_output=True, text=True
-        ).stdout.strip().splitlines()[0]
+        # Check if demo mode is enabled
+        demo_mode = self.config.get('demo_mode', False)
         
-        api_key = subprocess.run(
-            ['pass', 'show', 'kalshi/api_key'],
-            capture_output=True, text=True
-        ).stdout.strip()
-        
-        self.kalshi_client = KalshiClient(api_key_id=api_key_id, api_key=api_key)
+        if demo_mode:
+            logger.info("🎮 DEMO MODE: Using paper trading environment")
+            api_key_id = subprocess.run(
+                ['pass', 'show', 'kalshi/demo_api_key_id'],
+                capture_output=True, text=True
+            ).stdout.strip().splitlines()[0]
+            
+            api_key = subprocess.run(
+                ['pass', 'show', 'kalshi/demo_api_key'],
+                capture_output=True, text=True
+            ).stdout.strip()
+            
+            self.kalshi_client = KalshiClient(api_key_id=api_key_id, api_key=api_key, demo=True)
+        else:
+            logger.info("💰 LIVE MODE: Using real money!")
+            api_key_id = subprocess.run(
+                ['pass', 'show', 'kalshi/api_key_id'],
+                capture_output=True, text=True
+            ).stdout.strip().splitlines()[0]
+            
+            api_key = subprocess.run(
+                ['pass', 'show', 'kalshi/api_key'],
+                capture_output=True, text=True
+            ).stdout.strip()
+            
+            self.kalshi_client = KalshiClient(api_key_id=api_key_id, api_key=api_key, demo=False)
         
         # Test connection to verify API keys work
         logger.info("🔐 Testing Kalshi connection...")
