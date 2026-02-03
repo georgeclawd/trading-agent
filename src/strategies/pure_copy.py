@@ -378,18 +378,22 @@ class PureCopyStrategy(BaseStrategy):
     
     def _get_current_kalshi_ticker(self, crypto: str) -> Optional[str]:
         """Get the currently active Kalshi ticker for this crypto"""
-        # Kalshi 15M markets are 30-minute windows that close at :30
+        # Kalshi 15M markets are 15-minute windows
         # Ticker uses the CLOSE time (end of window), not start
         from datetime import timedelta
         
         now_utc = datetime.now(timezone.utc)
         now_est = now_utc - timedelta(hours=5)
         
-        # Kalshi windows are 30 min: :00-:30 and :30-:00
-        # Round UP to nearest 30 min to get window CLOSE time for ticker
+        # 15-minute windows: :00, :15, :30, :45
+        # Round UP to nearest 15 min to get window CLOSE time for ticker
         current_minute = now_est.minute
-        if current_minute < 30:
+        if current_minute < 15:
+            window_close_minute = 15
+        elif current_minute < 30:
             window_close_minute = 30
+        elif current_minute < 45:
+            window_close_minute = 45
         else:
             window_close_minute = 0
             now_est = now_est + timedelta(hours=1)
@@ -397,14 +401,14 @@ class PureCopyStrategy(BaseStrategy):
         window_close = now_est.replace(minute=window_close_minute, second=0, microsecond=0)
         
         # Calculate how far into the window we are
-        if current_minute < 30:
-            seconds_into_window = current_minute * 60 + now_est.second
-        else:
-            seconds_into_window = (current_minute - 30) * 60 + now_est.second
+        window_start_minute = window_close_minute - 15
+        if window_start_minute < 0:
+            window_start_minute = 45
+        seconds_into_window = (current_minute - window_start_minute) * 60 + now_est.second
         
         # Markets close ~10-12 min before window end for settlement
-        # Window is 30 min, so tradeable for ~20 min
-        if seconds_into_window > 1200:  # 20 minutes = 1200 seconds
+        # Window is 15 min, so tradeable for ~3-5 min
+        if seconds_into_window > 300:  # 5 minutes = 300 seconds
             logger.info(f"   Market likely closed (window started {seconds_into_window}s ago), skipping")
             return None
         
