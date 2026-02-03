@@ -203,9 +203,9 @@ class TradingAgent:
     
     async def _price_fetcher_loop(self):
         """
-        Background task to fetch BTC prices every minute for CryptoMomentum strategy
+        Background task to fetch prices every minute for CryptoMomentum strategy
         """
-        logger.info("📈 Starting BTC price fetcher (1-minute intervals)")
+        logger.info("📈 Starting multi-asset price fetcher (1-minute intervals)")
         
         # Get crypto strategy
         crypto_strategy = None
@@ -224,21 +224,30 @@ class TradingAgent:
             try:
                 logger.debug(f"Price fetcher cycle #{cycle_count}")
                 
-                # Fetch 1m candles (this updates the price history)
-                candles = await crypto_strategy.fetch_1m_candles()
+                # Fetch 1m candles for all assets (this updates the price history)
+                await crypto_strategy.fetch_1m_candles()
+                
+                # Check candle counts for all assets
+                assets_ready = 0
+                total_candles = 0
+                for asset, info in crypto_strategy.assets.items():
+                    num_candles = len(info.get('candles', []))
+                    total_candles += num_candles
+                    if num_candles >= 30:
+                        assets_ready += 1
                 
                 # Log progress periodically
-                if candles:
-                    num_candles = len(candles)
-                    if num_candles < 30:
-                        # Log every minute until we have 30 candles
-                        logger.info(f"📊 BTC 1m Candles: {num_candles}/30 (need {30 - num_candles} more) - {format_est()}")
+                if total_candles > 0:
+                    if assets_ready < len(crypto_strategy.assets):
+                        # Log every minute until all assets have 30 candles
+                        asset_status = ', '.join([f"{a}:{len(i.get('candles', []))}" for a, i in crypto_strategy.assets.items()])
+                        logger.info(f"📊 Candles - {asset_status} - {format_est()}")
                     else:
-                        # Show indicator preview when ready
-                        if num_candles == 30:
-                            logger.info(f"✅ BTC 1m Candles complete! Indicators ready - {format_est()}")
+                        # All assets ready
+                        if cycle_count % 60 == 0:  # Log every hour
+                            logger.info(f"✅ All assets ready! Trading BTC, ETH, SOL - {format_est()}")
                 else:
-                    logger.warning(f"Price fetcher: No candles returned - {format_est()}")
+                    logger.warning(f"Price fetcher: No candles yet - {format_est()}")
                 
                 # Wait 60 seconds
                 await asyncio.sleep(60)
