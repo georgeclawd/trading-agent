@@ -339,7 +339,8 @@ class PureCopyStrategy(BaseStrategy):
                             logger.info(f"   👤 {name}: {len(activity)} activities fetched")
                             
                             for trade in activity:
-                                tx_hash = trade.get('transaction_hash', '')
+                                # Polymarket uses 'transactionHash' not 'transaction_hash'
+                                tx_hash = trade.get('transactionHash') or trade.get('transaction_hash', '')
                                 trade_type = trade.get('type', 'UNKNOWN')
                                 
                                 # Log what we see
@@ -352,7 +353,7 @@ class PureCopyStrategy(BaseStrategy):
                                         self.seen_trades.add(tx_hash)
                                         await self._process_competitor_trade(name, trade)
                                 else:
-                                    logger.warning(f"      Activity has no tx_hash: {trade}")
+                                    logger.warning(f"      Activity has no tx_hash: {list(trade.keys())}")
                         else:
                             logger.info(f"   👤 {name}: No activity")
                                 
