@@ -56,35 +56,44 @@ class PureCopyStrategy(BaseStrategy):
     def _refresh_kalshi_markets(self):
         """Pull available 15M markets from Kalshi"""
         try:
-            markets = self.client.get_markets(limit=100)
-            if not markets or 'markets' not in markets:
-                return
-            
             self.kalshi_markets = {}
-            for m in markets.get('markets', []):
-                ticker = m.get('ticker', '')
-                # Look for 15M crypto markets
-                if '15M' not in ticker:
-                    continue
-                
-                # Determine crypto from ticker
-                crypto = None
-                if 'BTC' in ticker or 'bitcoin' in ticker.lower():
-                    crypto = 'BTC'
-                elif 'ETH' in ticker or 'ethereum' in ticker.lower():
-                    crypto = 'ETH'
-                elif 'SOL' in ticker or 'solana' in ticker.lower():
-                    crypto = 'SOL'
-                
-                if crypto and m.get('status') == 'active':
-                    # Check has liquidity
-                    ob = self.client.get_orderbook(ticker)
-                    if ob:
-                        yes = ob.get('orderbook', {}).get('yes')
-                        no = ob.get('orderbook', {}).get('no')
-                        if yes or no:
-                            self.kalshi_markets[crypto] = ticker
-                            logger.info(f"  Found market: {crypto} -> {ticker}")
+            
+            # Check each crypto series individually
+            for series in ['KXBTC15M', 'KXETH15M', 'KSOL15M']:
+                try:
+                    markets = self.client.get_markets(series_ticker=series, limit=5)
+                    if not markets:
+                        continue
+                    
+                    # markets is a list
+                    for m in markets:
+                        ticker = m.get('ticker', '')
+                        status = m.get('status', '')
+                        
+                        if status != 'active':
+                            continue
+                        
+                        # Determine crypto
+                        crypto = None
+                        if 'BTC' in ticker:
+                            crypto = 'BTC'
+                        elif 'ETH' in ticker:
+                            crypto = 'ETH'
+                        elif 'SOL' in ticker:
+                            crypto = 'SOL'
+                        
+                        if crypto:
+                            # Check liquidity
+                            ob = self.client.get_orderbook(ticker)
+                            if ob:
+                                yes = ob.get('orderbook', {}).get('yes')
+                                no = ob.get('orderbook', {}).get('no')
+                                if yes or no:
+                                    self.kalshi_markets[crypto] = ticker
+                                    logger.info(f"  Found market: {crypto} -> {ticker}")
+                                    break  # Use first valid market per crypto
+                except Exception as e:
+                    logger.debug(f"Error fetching {series}: {e}")
             
         except Exception as e:
             logger.error(f"Error refreshing markets: {e}")
