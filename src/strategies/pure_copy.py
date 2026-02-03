@@ -88,7 +88,7 @@ class PureCopyStrategy(BaseStrategy):
         hour = f"{now_est.hour:02d}"
         minute_str = f"{close_min:02d}"
         
-        return f"{series}-{year}{month}{day}{hour}{minute_str}-45"
+        return f"{series}-{year}{month}{day}{hour}{minute_str}-00"
     
     async def _copy_trade(self, competitor: str, trade: Dict):
         """Copy a single trade to Kalshi"""
