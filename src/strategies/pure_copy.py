@@ -258,11 +258,11 @@ class PureCopyStrategy(BaseStrategy):
                 logger.debug(f"   Invalid slug format: {pm_slug}")
                 return None
             
-            # Extract crypto type
+            # Extract crypto type (only BTC, ETH, SOL supported on Kalshi)
             crypto_map = {'btc': 'BTC', 'eth': 'ETH', 'sol': 'SOL'}
             crypto = crypto_map.get(parts[0].lower())
             if not crypto:
-                logger.debug(f"   Unknown crypto in slug: {parts[0]}")
+                logger.info(f"   Skipping unsupported crypto: {parts[0]} (Kalshi only supports BTC, ETH, SOL)")
                 return None
             
             # Extract timestamp (last part)
@@ -272,24 +272,29 @@ class PureCopyStrategy(BaseStrategy):
                 logger.debug(f"   Invalid timestamp in slug: {parts[-1]}")
                 return None
             
-            # Convert timestamp to datetime
-            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            # Convert timestamp to datetime (UTC)
+            dt_utc = datetime.fromtimestamp(timestamp, tz=timezone.utc)
             
-            # Build Kalshi ticker
+            # Kalshi uses EST (UTC-5) for market times, not UTC!
+            # Convert UTC to EST
+            from datetime import timedelta
+            dt_est = dt_utc - timedelta(hours=5)
+            
+            # Build Kalshi ticker using EST time
             series_map = {'BTC': 'KXBTC15M', 'ETH': 'KXETH15M', 'SOL': 'KSOL15M'}
             series = series_map[crypto]
             
             month_map = {1:'JAN', 2:'FEB', 3:'MAR', 4:'APR', 5:'MAY', 6:'JUN',
                         7:'JUL', 8:'AUG', 9:'SEP', 10:'OCT', 11:'NOV', 12:'DEC'}
             
-            year_str = str(dt.year)[2:]  # '26' from '2026'
-            month_str = month_map.get(dt.month, 'XXX')
-            day_str = f"{dt.day:02d}"
-            hour_str = f"{dt.hour:02d}"
-            min_str = f"{dt.minute:02d}"
+            year_str = str(dt_est.year)[2:]  # '26' from '2026'
+            month_str = month_map.get(dt_est.month, 'XXX')
+            day_str = f"{dt_est.day:02d}"
+            hour_str = f"{dt_est.hour:02d}"
+            min_str = f"{dt_est.minute:02d}"
             
             kalshi_ticker = f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-00"
-            logger.debug(f"   Mapped: {pm_slug} -> {kalshi_ticker}")
+            logger.info(f"   Mapped: {pm_slug} ({dt_utc.strftime('%H:%M')} UTC / {dt_est.strftime('%H:%M')} EST) -> {kalshi_ticker}")
             return kalshi_ticker
             
         except Exception as e:
