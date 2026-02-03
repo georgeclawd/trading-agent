@@ -188,5 +188,9 @@ class PureCopyStrategy(BaseStrategy):
         """Entry point"""
         await self.scan()
     
+    async def execute(self, opportunities):
+        """Execute is handled by polling loop"""
+        return 0
+    
     def get_performance(self):
         return {'name': self.name, 'trades': len(self.trades)}
