@@ -135,34 +135,39 @@ class CryptoMomentumStrategy(BaseStrategy):
     
     async def fetch_1m_candles(self):
         """Fetch 1-minute candles for all assets"""
-        session = await self._get_session()
-        
-        # CoinGecko API for all assets
         try:
-            url = f"https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true"
-            async with session.get(url, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    
-                    now = datetime.now()
-                    for asset, info in self.assets.items():
-                        coingecko_id = info['coingecko_id']
-                        if coingecko_id in data:
-                            price = data[coingecko_id]['usd']
-                            info['last_price'] = price
-                            
-                            # Update candles for this asset
-                            self._update_asset_candles(asset, price, now)
-                    
-                    # Save periodically
-                    self._save_candles()
-                    
-                elif resp.status == 429:
-                    logger.warning("CryptoMomentum: CoinGecko RATE LIMITED (429)")
-                else:
-                    logger.debug(f"CryptoMomentum: CoinGecko HTTP {resp.status}")
+            session = await self._get_session()
+            
+            # CoinGecko API for all assets
+            url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd"
+            
+            async with asyncio.timeout(10):
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        
+                        now = datetime.now()
+                        for asset, info in self.assets.items():
+                            coingecko_id = info['coingecko_id']
+                            if coingecko_id in data:
+                                price = data[coingecko_id]['usd']
+                                info['last_price'] = price
+                                
+                                # Update candles for this asset
+                                self._update_asset_candles(asset, price, now)
+                        
+                        # Save periodically
+                        self._save_candles()
+                        
+                    elif resp.status == 429:
+                        logger.warning("CryptoMomentum: CoinGecko RATE LIMITED (429)")
+                    else:
+                        logger.debug(f"CryptoMomentum: CoinGecko HTTP {resp.status}")
+                        
+        except asyncio.TimeoutError:
+            logger.warning("CryptoMomentum: CoinGecko TIMEOUT")
         except Exception as e:
-            logger.warning(f"CryptoMomentum: Failed to fetch prices: {e}")
+            logger.warning(f"CryptoMomentum: Failed to fetch prices: {type(e).__name__}: {e}")
     
     def _update_asset_candles(self, asset: str, price: float, now: datetime):
         """Update 1-minute candles for a specific asset"""
