@@ -14,6 +14,11 @@ from typing import Dict, List, Optional
 # Strategy framework
 from strategy_framework import StrategyManager
 from strategies import WeatherPredictionStrategy, SpreadTradingStrategy, CryptoMomentumStrategy, LongshotWeatherStrategy
+try:
+    from strategies.pure_copy import PureCopyStrategy
+    PURE_COPY_AVAILABLE = True
+except ImportError:
+    PURE_COPY_AVAILABLE = False
 from position_manager import PositionManager
 
 # Legacy components
@@ -210,6 +215,19 @@ class TradingAgent:
             )
             allocation = longshot_cfg.get('allocation', 0.25)
             self.strategy_manager.register_strategy(longshot_strategy, allocation)
+        
+        # Register Pure Copy Strategy (LIVE - Copy competitors)
+        if PURE_COPY_AVAILABLE:
+            pure_copy_cfg = self.config.get('strategies', {}).get('PureCopy', {})
+            if pure_copy_cfg.get('enabled', False):
+                pure_copy_strategy = PureCopyStrategy(
+                    config={**self.config, 'dry_run': pure_copy_cfg.get('dry_run', False)},
+                    client=self.kalshi_client,
+                    position_manager=self.position_manager
+                )
+                allocation = pure_copy_cfg.get('allocation', 0.50)
+                self.strategy_manager.register_strategy(pure_copy_strategy, allocation)
+                logger.info("✅ Pure Copy strategy registered - copying competitor trades")
         
         logger.info(f"✅ Registered {len(self.strategy_manager.strategies)} strategies")
         

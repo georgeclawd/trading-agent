@@ -1,78 +1,37 @@
-# Trading Agent Configuration
+# Trading Configuration
 
-# Initial bankroll in USDC
-initial_bankroll: 100.0
-currency: USDC
+bot:
+  name: "Copy Trading Bot"
+  dry_run: false  # LIVE TRADING
+  check_interval: 10
+  timezone: "UTC"  # Internal timezone
+  display_timezone: "EST"  # Display for user (UTC-5)
+  initial_bankroll: 100.0
 
-# Trading Mode
-demo_mode: true              # Use Kalshi demo/paper trading environment
-                            # Set to false for real money trading
-
-# Risk Management
-max_position_size: 5.0       # Max $5 per trade (absolute dollars)
-daily_loss_limit: 0.20       # Stop trading after 20% daily loss
-kelly_fraction: 0.25         # Conservative Kelly criterion
-min_ev_threshold: 0.05       # Minimum 5% expected value
-
-# Scanning (default - can override per strategy)
-scan_interval: 1800          # 30 minutes between market scans
-
-# Markets to trade
-markets:
-  polymarket:
-    enabled: true
-    api_endpoint: https://api.polymarket.com
-    min_liquidity: 1000      # Minimum $1000 liquidity
-    
-  weather:
-    enabled: true
-    data_source: open-meteo
-    cities:
-      - name: New York
-        lat: 40.7128
-        lon: -74.0060
-      - name: London
-        lat: 51.5074
-        lon: -0.1278
-      - name: Tokyo
-        lat: 35.6762
-        lon: 139.6503
-        
-  sports:
-    enabled: false           # Enable later
-    
-  crypto:
-    enabled: false           # Enable later
-
-# Alert Settings
-discord:
-  enabled: true
-  webhook: "${DISCORD_WEBHOOK}"
-  
-# Strategy Configuration
 strategies:
-  weather_prediction:
-    enabled: false           # Disabled for paper trading test
-    allocation: 0.00
-    dry_run: true
-    scan_interval: 1800
-  spread_trading:
-    enabled: false           # Disabled for paper trading test
-    allocation: 0.00
-    dry_run: true
-    scan_interval: 1800
   crypto_momentum:
-    enabled: true            # ENABLED - Testing FIXED algorithm
-    allocation: 1.00         # 100% for demo testing
-    dry_run: false           # Trade on demo environment
-    scan_interval: 60        # Check every minute
-  longshot_weather:
-    enabled: false           # Disabled - testing CryptoMomentum fix
-    allocation: 0.00
-    dry_run: true
-    scan_interval: 1800
-    max_position_size: 3
+    enabled: false  # DISABLED - using PureCopy instead
+  PureCopy:
+    enabled: true
+    allocation: 100
+    dry_run: false
+    config:
+      competitors:
+        - name: "distinct-baguette"
+          address: "0xe00740bce98a594e26861838885ab310ec3b548c"
+        - name: "0x8dxd"
+          address: "0x63ce342161250d705dc0b16df89036c8e5f9ba9a"
+        - name: "k9Q2mX4L8A7ZP3R"
+          address: "0xd0d6053c3c37e727402d84c14069780d360993aa"
+      copy_sizing:
+        method: "proportional"  # Copy size proportional to competitor
+        ratio: 0.1  # Copy 10% of their size
+        max_contracts: 10
+      poll_interval: 10  # seconds
 
-# Logging
-log_level: INFO
-save_trades: true
+kalshi:
+  demo: false  # LIVE trading
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
