@@ -142,13 +142,21 @@ class KalshiClient:
             print(f"[Kalshi] Error getting orderbook: {e}")
             return None
     
-    def place_order(self, market_id: str, side: str, price: float, count: int) -> Dict:
-        """Place a limit order per Kalshi API docs"""
+    def place_order(self, market_id: str, side: str, price: float, count: int, action: str = "buy") -> Dict:
+        """Place a limit order per Kalshi API docs
+        
+        Args:
+            market_id: Market ticker
+            side: 'yes' or 'no'
+            price: Price in cents (1-99)
+            count: Number of contracts
+            action: 'buy' or 'sell' (sell to close a position)
+        """
         import uuid
         
         data = {
             "ticker": market_id,
-            "action": "buy",
+            "action": action.lower(),
             "side": side.lower(),
             "count": int(count),
             "type": "limit",
@@ -172,7 +180,8 @@ class KalshiClient:
                     "market": market_id,
                     "side": side,
                     "price": price,
-                    "count": count
+                    "count": count,
+                    "action": action
                 }
             else:
                 return {
@@ -182,6 +191,21 @@ class KalshiClient:
                 }
         except Exception as e:
             return {"success": False, "error": str(e)}
+    
+    def close_position(self, market_id: str, side: str, price: float, count: int) -> Dict:
+        """Close a position by selling contracts
+        
+        On Kalshi, you close a position by selling the same side you bought:
+        - Bought YES at 40c -> Sell YES at 70c to close (profit)
+        - Bought NO at 60c -> Sell NO at 40c to close (loss)
+        
+        Args:
+            market_id: Market ticker
+            side: 'yes' or 'no' (same side you originally bought)
+            price: Price in cents to sell at
+            count: Number of contracts to sell
+        """
+        return self.place_order(market_id, side, price, count, action="sell")
     
     def get_positions(self) -> List[Dict]:
         """Get positions"""
