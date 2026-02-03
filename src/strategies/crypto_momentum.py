@@ -524,6 +524,17 @@ class CryptoMomentumStrategy(BaseStrategy):
                     pass
                 return None
             
+            # Check for early exit opportunities (take profit / stop loss)
+            if self.position_monitor:
+                exits = await self.position_monitor.check_and_exit_positions(
+                    self, 
+                    auto_exit=True,  # Automatically execute exits
+                    simulated=self.dry_run
+                )
+                if exits > 0:
+                    logger.info(f"🔄 CryptoMomentum: Executed {exits} early exits")
+            
+            # Regular position monitoring
             alerts = await self.position_monitor.check_all_positions(self, get_market_data)
             
             if alerts:

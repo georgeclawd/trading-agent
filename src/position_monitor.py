@@ -408,6 +408,177 @@ class PositionMonitor:
         else:
             return 1  # Minimal hedge
     
+    async def execute_exit(self, position_state: PositionState, simulated: bool = False) -> bool:
+        """
+        Execute early exit by hedging the position.
+        On Kalshi, you exit by buying the opposite side.
+        
+        Example:
+        - Bought YES at 40¢, now at 60¢
+        - Buy NO at 40¢ to lock in 20¢ profit
+        - Total payout: $1 - cost = $1 - 80¢ = 20¢ profit
+        
+        Args:
+            position_state: Current state of the position
+            simulated: If True, don't actually trade
+            
+        Returns:
+            True if exit executed successfully
+        """
+        ticker = position_state.ticker
+        original_side = position_state.side
+        exit_side = 'NO' if original_side == 'YES' else 'YES'
+        contracts = int(position_state.contracts)
+        
+        # Get current market price for exit side
+        try:
+            import requests
+            import time
+            import base64
+            from cryptography.hazmat.primitives import hashes, padding as crypto_padding
+            
+            api_key_id = self.kalshi_client.api_key_id
+            api_key = self.kalshi_client.api_key
+            
+            def create_sig(ts, method, path):
+                msg = f"{ts}{method}{path}"
+                sig = self.kalshi_client._private_key.sign(
+                    msg.encode(),
+                    crypto_padding.PSS(mgf=crypto_padding.MGF1(hashes.SHA256()), salt_length=crypto_padding.PSS.DIGEST_LENGTH),
+                    hashes.SHA256()
+                )
+                return base64.b64encode(sig).decode()
+            
+            # Get orderbook for the exit side
+            ts = str(int(time.time() * 1000))
+            sig = create_sig(ts, "GET", f"/trade-api/v2/markets/{ticker}/orderbook")
+            
+            headers = {
+                "KALSHI-ACCESS-KEY": api_key_id,
+                "KALSHI-ACCESS-SIGNATURE": sig,
+                "KALSHI-ACCESS-TIMESTAMP": ts
+            }
+            
+            resp = requests.get(
+                f"https://api.elections.kalshi.com/trade-api/v2/markets/{ticker}/orderbook",
+                headers=headers,
+                timeout=10
+            )
+            
+            if resp.status_code != 200:
+                logger.error(f"❌ Exit failed: Could not fetch orderbook for {ticker}")
+                return False
+            
+            orderbook = resp.json().get('orderbook', {})
+            
+            # Get best ask price for exit side (we want to buy)
+            if exit_side == 'YES':
+                asks = orderbook.get('yes', [])
+                if not asks:
+                    logger.error(f"❌ Exit failed: No YES asks for {ticker}")
+                    return False
+                exit_price = asks[0][0]  # Best ask
+            else:
+                asks = orderbook.get('no', [])
+                if not asks:
+                    logger.error(f"❌ Exit failed: No NO asks for {ticker}")
+                    return False
+                exit_price = asks[0][0]  # Best ask
+            
+            if simulated:
+                # Calculate realized P&L
+                if original_side == 'YES':
+                    pnl = (100 - exit_price - position_state.entry_price) * contracts / 100
+                else:  # NO
+                    pnl = (100 - exit_price - position_state.entry_price) * contracts / 100
+                
+                logger.info(f"💰 [SIMULATED] Early exit {ticker}: {original_side}→{exit_side} @ {exit_price}c | P&L: ${pnl:+.2f}")
+                
+                # Close position locally
+                self.position_manager.close_position(
+                    ticker=ticker,
+                    exit_price=exit_price,
+                    pnl=pnl,
+                    simulated=True
+                )
+                return True
+            
+            # REAL: Place exit order
+            logger.info(f"🔄 [REAL] Early exit {ticker}: Buying {exit_side} x{contracts} @ {exit_price}c to close {original_side}")
+            
+            result = self.kalshi_client.place_order(
+                market_id=ticker,
+                side=exit_side.lower(),
+                price=exit_price,
+                count=contracts
+            )
+            
+            if result.get('order_id'):
+                # Calculate realized P&L
+                # When you hedge, you pay exit_price for the opposite side
+                # Your total cost is entry_price + exit_price
+                # Max payout is $1 per contract
+                total_cost = position_state.entry_price + exit_price
+                profit_per_contract = 100 - total_cost  # in cents
+                pnl = profit_per_contract * contracts / 100  # in dollars
+                
+                logger.info(f"💰 [REAL] Exit executed {ticker}: Order {result['order_id']} | P&L: ${pnl:+.2f}")
+                
+                # Close position locally
+                self.position_manager.close_position(
+                    ticker=ticker,
+                    exit_price=exit_price,
+                    pnl=pnl,
+                    simulated=False
+                )
+                return True
+            else:
+                logger.error(f"❌ [REAL] Exit failed for {ticker}: {result}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Exit error for {ticker}: {e}")
+            return False
+    
+    async def check_and_exit_positions(self, strategy, auto_exit: bool = False, simulated: bool = False):
+        """
+        Check positions and optionally auto-exit based on signals
+        
+        Args:
+            strategy: Strategy instance
+            auto_exit: If True, automatically execute exits. If False, just log recommendations.
+            simulated: Whether to simulate trades
+        """
+        async def get_market_data(ticker):
+            """Fetch current market data"""
+            try:
+                orderbook = self.kalshi_client.get_orderbook(ticker)
+                if orderbook and 'orderbook' in orderbook:
+                    yes_bids = orderbook['orderbook'].get('yes', [])
+                    if yes_bids:
+                        return {'price': yes_bids[0][0] / 100}
+            except:
+                pass
+            return None
+        
+        # Get all positions with exit signals
+        open_positions = self.position_manager.get_open_positions(strategy.name, simulated)
+        
+        exits_executed = 0
+        for position in open_positions:
+            state = await self._analyze_position(position, get_market_data)
+            
+            if state and state.recommendation in ['EXIT', 'HEDGE']:
+                if auto_exit:
+                    success = await self.execute_exit(state, simulated=simulated)
+                    if success:
+                        exits_executed += 1
+                else:
+                    # Just log the recommendation
+                    self._log_recommendation(state)
+        
+        return exits_executed
+    
     def get_position_summary(self, strategy_name: str, simulated: bool = False) -> Dict:
         """Get summary of all positions for a strategy"""
         positions = self.position_manager.get_open_positions(strategy_name, simulated)
