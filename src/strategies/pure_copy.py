@@ -59,7 +59,7 @@ class PureCopyStrategy(BaseStrategy):
             self.kalshi_markets = {}
             
             # Check each crypto series individually
-            for series in ['KXBTC15M', 'KXETH15M', 'KSOL15M']:
+            for series in ['KXBTC15M', 'KXETH15M', 'KXSOL15M']:
                 try:
                     markets = self.client.get_markets(series_ticker=series, limit=5)
                     if not markets:
