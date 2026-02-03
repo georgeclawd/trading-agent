@@ -737,38 +737,50 @@ class CryptoMomentumStrategy(BaseStrategy):
             ticker = market['ticker']
             title = market.get('title', '')
             
-            # Determine YES/NO side
-            is_yes = 'YES' in title.upper() or market.get('yes_sub_title', '').upper() == 'YES'
-            
             try:
                 orderbook_response = self.client.get_orderbook(ticker)
                 orderbook = orderbook_response.get('orderbook', {})
                 yes_bids = orderbook.get('yes', [])
-                yes_asks = orderbook.get('yes', [])
+                no_bids = orderbook.get('no', [])
                 
-                if not yes_bids:
+                if not yes_bids or not no_bids:
                     continue
                 
-                # Get best YES price
-                market_price = yes_bids[0][0] / 100  # Kalshi returns cents
+                # Get best YES and NO prices
+                yes_price = yes_bids[0][0] / 100  # Kalshi returns cents
+                no_price = no_bids[0][0] / 100
+                
+                # Determine which side to bet based on probability
+                # raw_prob > 0.5 means bullish → bet YES (price will go up)
+                # raw_prob < 0.5 means bearish → bet NO (price will not go up)
+                if raw_prob > 0.5:
+                    # Bullish - bet YES
+                    side = 'YES'
+                    market_price = yes_price
+                    fair_prob = raw_prob
+                else:
+                    # Bearish - bet NO  
+                    side = 'NO'
+                    market_price = no_price
+                    fair_prob = 1 - raw_prob  # Probability of NO = 1 - P(YES)
                 
                 # Compute edge
-                edge = self.compute_edge(raw_prob if is_yes else 1 - raw_prob, market_price, minutes)
+                edge = self.compute_edge(fair_prob, market_price, minutes)
                 
                 if edge > 0.1:  # 10% edge threshold
                     opportunities.append({
                         'ticker': ticker,
                         'market': title,
-                        'side': 'YES' if is_yes else 'NO',
+                        'side': side,
                         'market_price': market_price,
-                        'fair_probability': raw_prob if is_yes else 1 - raw_prob,
+                        'fair_probability': fair_prob,
                         'edge': edge,
                         'direction_score': direction_score,
                         'rsi': rsi,
                         'macd_hist': macd['histogram']
                     })
                     
-                    logger.info(f"CryptoMomentum: OPPORTUNITY {ticker} - Edge={edge:.2%}, Price={market_price:.2%}, Prob={raw_prob:.2%}")
+                    logger.info(f"CryptoMomentum: OPPORTUNITY {ticker} {side} - Edge={edge:.2%}, Price={market_price:.2%}, Prob={fair_prob:.2%}")
                     
             except Exception as e:
                 logger.debug(f"CryptoMomentum: Error analyzing {ticker}: {e}")
