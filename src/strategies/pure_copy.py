@@ -170,7 +170,7 @@ class PureCopyStrategy(BaseStrategy):
         
         # Parse the Polymarket slug to get crypto and timestamp
         # Format: {crypto}-updown-15m-{unix_timestamp}
-        kalshi_ticker = self._map_pm_slug_to_kalshi(pm_slug)
+        kalshi_ticker = self._map_pm_slug_to_kalshi(pm_slug, trade)
         
         if not kalshi_ticker:
             logger.warning(f"   Could not map slug '{pm_slug}' to Kalshi ticker")
@@ -241,7 +241,7 @@ class PureCopyStrategy(BaseStrategy):
         # Return None to trigger the brute force approach
         return None
     
-    def _map_pm_slug_to_kalshi(self, pm_slug: str) -> Optional[str]:
+    def _map_pm_slug_to_kalshi(self, pm_slug: str, trade: Dict = None) -> Optional[str]:
         """
         Map Polymarket slug to Kalshi ticker
         
@@ -252,54 +252,92 @@ class PureCopyStrategy(BaseStrategy):
             return None
         
         try:
-            # Parse slug: btc-updown-15m-1770158700
+            # Check for standard format: btc-updown-15m-1770158700
             parts = pm_slug.split('-')
-            if len(parts) < 4:
-                logger.debug(f"   Invalid slug format: {pm_slug}")
-                return None
             
-            # Extract crypto type (only BTC, ETH, SOL supported on Kalshi)
-            crypto_map = {'btc': 'BTC', 'eth': 'ETH', 'sol': 'SOL'}
-            crypto = crypto_map.get(parts[0].lower())
-            if not crypto:
-                logger.info(f"   Skipping unsupported crypto: {parts[0]} (Kalshi only supports BTC, ETH, SOL)")
-                return None
+            # Format 1: {crypto}-updown-15m-{timestamp} (e.g., btc-updown-15m-1770158700)
+            if len(parts) >= 4 and parts[1] == 'updown' and parts[2] == '15m':
+                return self._map_standard_slug(pm_slug, parts)
             
-            # Extract timestamp (last part)
-            try:
-                timestamp = int(parts[-1])
-            except ValueError:
-                logger.debug(f"   Invalid timestamp in slug: {parts[-1]}")
-                return None
+            # Format 2: {crypto}-up-or-down-{month}-{day}-{time} (e.g., bitcoin-up-or-down-february-3-6pm-et)
+            # These use the trade timestamp instead
+            if trade and 'timestamp' in trade:
+                return self._map_from_trade_timestamp(trade, pm_slug)
             
-            # Convert timestamp to datetime (UTC)
-            dt_utc = datetime.fromtimestamp(timestamp, tz=timezone.utc)
-            
-            # Kalshi uses EST (UTC-5) for market times, not UTC!
-            # Convert UTC to EST
-            from datetime import timedelta
-            dt_est = dt_utc - timedelta(hours=5)
-            
-            # Build Kalshi ticker using EST time
-            series_map = {'BTC': 'KXBTC15M', 'ETH': 'KXETH15M', 'SOL': 'KSOL15M'}
-            series = series_map[crypto]
-            
-            month_map = {1:'JAN', 2:'FEB', 3:'MAR', 4:'APR', 5:'MAY', 6:'JUN',
-                        7:'JUL', 8:'AUG', 9:'SEP', 10:'OCT', 11:'NOV', 12:'DEC'}
-            
-            year_str = str(dt_est.year)[2:]  # '26' from '2026'
-            month_str = month_map.get(dt_est.month, 'XXX')
-            day_str = f"{dt_est.day:02d}"
-            hour_str = f"{dt_est.hour:02d}"
-            min_str = f"{dt_est.minute:02d}"
-            
-            kalshi_ticker = f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-00"
-            logger.info(f"   Mapped: {pm_slug} ({dt_utc.strftime('%H:%M')} UTC / {dt_est.strftime('%H:%M')} EST) -> {kalshi_ticker}")
-            return kalshi_ticker
+            logger.debug(f"   Unknown slug format: {pm_slug}")
+            return None
             
         except Exception as e:
             logger.warning(f"   Error mapping slug '{pm_slug}': {e}")
             return None
+    
+    def _map_standard_slug(self, pm_slug: str, parts: list) -> Optional[str]:
+        """Map standard format: btc-updown-15m-1770158700"""
+        # Extract crypto type (only BTC, ETH, SOL supported on Kalshi)
+        crypto_map = {'btc': 'BTC', 'eth': 'ETH', 'sol': 'SOL'}
+        crypto = crypto_map.get(parts[0].lower())
+        if not crypto:
+            logger.info(f"   Skipping unsupported crypto: {parts[0]} (Kalshi only supports BTC, ETH, SOL)")
+            return None
+        
+        # Extract timestamp (last part)
+        try:
+            timestamp = int(parts[-1])
+        except ValueError:
+            logger.debug(f"   Invalid timestamp in slug: {parts[-1]}")
+            return None
+        
+        return self._build_kalshi_ticker(crypto, timestamp, pm_slug)
+    
+    def _map_from_trade_timestamp(self, trade: Dict, pm_slug: str) -> Optional[str]:
+        """Map using trade timestamp for non-standard slugs"""
+        # Try to detect crypto from title
+        title = trade.get('title', '').lower()
+        crypto = None
+        if 'bitcoin' in title or 'btc' in title:
+            crypto = 'BTC'
+        elif 'ethereum' in title or 'eth' in title:
+            crypto = 'ETH'
+        elif 'solana' in title or 'sol' in title:
+            crypto = 'SOL'
+        
+        if not crypto:
+            logger.info(f"   Could not detect crypto from title: {title[:50]}")
+            return None
+        
+        # Use trade timestamp
+        timestamp = trade.get('timestamp', 0)
+        if not timestamp:
+            return None
+        
+        return self._build_kalshi_ticker(crypto, timestamp, pm_slug)
+    
+    def _build_kalshi_ticker(self, crypto: str, timestamp: int, pm_slug: str) -> str:
+        """Build Kalshi ticker from crypto and timestamp"""
+        from datetime import timedelta
+        
+        # Convert timestamp to datetime (UTC)
+        dt_utc = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        
+        # Kalshi uses EST (UTC-5) for market times
+        dt_est = dt_utc - timedelta(hours=5)
+        
+        # Build Kalshi ticker using EST time
+        series_map = {'BTC': 'KXBTC15M', 'ETH': 'KXETH15M', 'SOL': 'KSOL15M'}
+        series = series_map[crypto]
+        
+        month_map = {1:'JAN', 2:'FEB', 3:'MAR', 4:'APR', 5:'MAY', 6:'JUN',
+                    7:'JUL', 8:'AUG', 9:'SEP', 10:'OCT', 11:'NOV', 12:'DEC'}
+        
+        year_str = str(dt_est.year)[2:]
+        month_str = month_map.get(dt_est.month, 'XXX')
+        day_str = f"{dt_est.day:02d}"
+        hour_str = f"{dt_est.hour:02d}"
+        min_str = f"{dt_est.minute:02d}"
+        
+        kalshi_ticker = f"{series}-{year_str}{month_str}{day_str}{hour_str}{min_str}-00"
+        logger.info(f"   Mapped: {pm_slug} ({dt_utc.strftime('%H:%M')} UTC / {dt_est.strftime('%H:%M')} EST) -> {kalshi_ticker}")
+        return kalshi_ticker
     
     async def _lookup_pm_market(self, asset_id: str) -> Optional[Dict]:
         """Look up Polymarket market from asset ID"""
