@@ -184,6 +184,12 @@ class PureCopyStrategy(BaseStrategy):
         
         logger.info(f"   Kalshi Ticker: {kalshi_ticker}")
         
+        # Check if market is still open
+        orderbook = self.client.get_orderbook(kalshi_ticker)
+        if not orderbook:
+            logger.info(f"   Market {kalshi_ticker} is closed or not found, skipping")
+            return
+        
         # Determine side - for BUY/SELL
         # On Polymarket: BUY = buy YES contracts, SELL = sell YES (or buy NO)
         # On Kalshi: YES contracts for buy side, NO contracts for sell side
