@@ -400,15 +400,23 @@ class CryptoMomentumStrategy(BaseStrategy):
                 all_markets = response.json().get('markets', [])
                 
                 # Filter to only markets that are OPEN NOW (between open_time and close_time)
-                now = datetime.now()
+                from datetime import timezone
+                now = datetime.now(timezone.utc)
+                
                 for m in all_markets:
                     open_time_str = m.get('open_time', '')
                     close_time_str = m.get('close_time', '')
                     if open_time_str and close_time_str:
                         try:
-                            # Parse times
-                            open_time = datetime.fromisoformat(open_time_str.replace('Z', '+00:00').replace('+00:00', ''))
-                            close_time = datetime.fromisoformat(close_time_str.replace('Z', '+00:00').replace('+00:00', ''))
+                            # Parse times (handle both Z and +00:00 formats)
+                            open_time = datetime.fromisoformat(open_time_str.replace('Z', '+00:00'))
+                            close_time = datetime.fromisoformat(close_time_str.replace('Z', '+00:00'))
+                            
+                            # Ensure both are UTC
+                            if open_time.tzinfo is None:
+                                open_time = open_time.replace(tzinfo=timezone.utc)
+                            if close_time.tzinfo is None:
+                                close_time = close_time.replace(tzinfo=timezone.utc)
                             
                             # Check if market is currently open for trading
                             is_open = open_time <= now < close_time
@@ -417,8 +425,10 @@ class CryptoMomentumStrategy(BaseStrategy):
                             if is_open:
                                 markets.append(m)
                                 logger.info(f"   🎯 OPEN market: {m['ticker']} (closes in {minutes_until_close:.0f} min)")
+                            else:
+                                logger.debug(f"   ⏸️  CLOSED: {m['ticker']} (closes in {minutes_until_close:.0f} min)")
                         except Exception as e:
-                            logger.debug(f"   Could not parse times for {m['ticker']}: {e}")
+                            logger.warning(f"   Could not parse times for {m['ticker']}: {e}")
                 
                 logger.info(f"📊 Found {len(markets)} ACTIVE markets (from {len(all_markets)} total open)")
             except Exception as e:
