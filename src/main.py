@@ -343,6 +343,8 @@ class TradingAgent:
     
     async def _strategy_loop(self, strategy):
         """Run a single strategy in its own loop with its own interval"""
+        logger.info(f"📍 _strategy_loop() entered for {strategy.name}")
+        
         # Map strategy names to config keys
         name_to_key = {
             'WeatherPrediction': 'weather_prediction',
@@ -358,14 +360,20 @@ class TradingAgent:
         # Convert interval to minutes for display
         interval_min = interval // 60
         
+        logger.info(f"📍 Checking if {strategy.name} uses continuous loop...")
         # For strategies with continuous loops, use their own loop
         if strategy.name in ["CryptoMomentum", "PureCopy"]:
+            logger.info(f"📍 {strategy.name} matches continuous loop list, calling _run_crypto_momentum_loop")
             await self._run_crypto_momentum_loop(strategy)
         else:
+            logger.info(f"📍 {strategy.name} using regular loop")
             await self._run_strategy_loop(strategy, interval, interval_min)
+        
+        logger.info(f"📍 _strategy_loop() completed for {strategy.name}")
     
     async def _run_crypto_momentum_loop(self, strategy):
         """Run strategy in continuous trading mode"""
+        logger.info(f"🚀 _run_crypto_momentum_loop() called for {strategy.name}")
         logger.info(f"🚀 Starting {strategy.name} continuous trading - {format_est()}")
         if strategy.name == "CryptoMomentum":
             logger.info("📈 Trading every minute within 15-min windows")
@@ -373,10 +381,13 @@ class TradingAgent:
             logger.info("👥 Copying competitor trades in real-time")
         
         # Run the strategy's continuous loop
+        logger.info(f"📍 About to call {strategy.name}.continuous_trade_loop()")
         try:
             await strategy.continuous_trade_loop()
+            logger.info(f"📍 {strategy.name}.continuous_trade_loop() returned")
         except Exception as e:
             logger.error(f"❌ Error in {strategy.name} continuous loop: {e}", exc_info=True)
+        logger.info(f"📍 _run_crypto_momentum_loop() completed for {strategy.name}")
     
     async def _run_strategy_loop(self, strategy, interval, interval_min, aligned=False):
         """Run strategy in regular loop"""
