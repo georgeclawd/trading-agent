@@ -173,7 +173,6 @@ class PureCopyStrategy(BaseStrategy):
         
         # FILTER: Only copy 15-minute markets (not hourly/daily)
         if '-updown-15m-' not in pm_slug:
-            logger.info(f"   Skipping non-15m market: {pm_slug}")
             return
         
         # Get the current ACTIVE Kalshi market for this crypto
