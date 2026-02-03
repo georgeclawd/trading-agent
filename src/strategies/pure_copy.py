@@ -333,21 +333,31 @@ class PureCopyStrategy(BaseStrategy):
                     try:
                         from competitor_tracker import PolymarketTracker
                         tracker = PolymarketTracker()
-                        activity = tracker.get_user_activity(address, limit=3)
+                        activity = tracker.get_user_activity(address, limit=5)
                         
-                        if activity and poll_count % 6 == 0:
-                            logger.info(f"   👤 {name}: {len(activity)} recent activities")
-                        
-                        for trade in activity:
-                            tx_hash = trade.get('transaction_hash', '')
-                            if tx_hash and tx_hash not in self.seen_trades:
-                                self.seen_trades.add(tx_hash)
-                                logger.info(f"🚨 NEW TRADE from {name}!")
-                                await self._process_competitor_trade(name, trade)
+                        if activity:
+                            logger.info(f"   👤 {name}: {len(activity)} activities fetched")
+                            
+                            for trade in activity:
+                                tx_hash = trade.get('transaction_hash', '')
+                                trade_type = trade.get('type', 'UNKNOWN')
+                                
+                                # Log what we see
+                                if tx_hash:
+                                    if tx_hash in self.seen_trades:
+                                        logger.debug(f"      Skipping seen trade: {tx_hash[:20]}...")
+                                    else:
+                                        logger.info(f"🚨 NEW TRADE from {name}! Type: {trade_type}")
+                                        logger.info(f"      Tx: {tx_hash[:30]}...")
+                                        self.seen_trades.add(tx_hash)
+                                        await self._process_competitor_trade(name, trade)
+                                else:
+                                    logger.warning(f"      Activity has no tx_hash: {trade}")
+                        else:
+                            logger.info(f"   👤 {name}: No activity")
                                 
                     except Exception as e:
-                        if poll_count % 6 == 0:
-                            logger.debug(f"   Could not poll {name}: {e}")
+                        logger.error(f"   💥 Error polling {name}: {e}", exc_info=True)
                 
                 await asyncio.sleep(10)  # Poll every 10 seconds
                 
