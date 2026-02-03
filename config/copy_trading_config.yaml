@@ -1,0 +1,34 @@
+# Copy Trading Configuration
+# Copies successful competitor trades from Polymarket to Kalshi
+
+bot:
+  name: "Copy Trading Bot"
+  version: "1.0.0"
+  dry_run: false  # Set to true for paper trading
+  check_interval: 30  # seconds between checks
+  
+competitors:
+  - name: "distinct-baguette"
+    address: "0xe00740bce98a594e26861838885ab310ec3b548c"
+    weight: 1.0
+  - name: "0x8dxd"
+    address: "0x63ce342161250d705dc0b16df89036c8e5f9ba9a"
+    weight: 1.0
+  - name: "k9Q2mX4L8A7ZP3R"
+    address: "0xd0d6053c3c37e727402d84c14069780d360993aa"
+    weight: 1.0
+
+copy_trading:
+  enabled: true
+  min_confidence: 0.0  # Copy even single trades
+  max_position_size: 10  # contracts
+  copy_delay_seconds: 5  # How fast to copy after competitor
+  markets:
+    - weather  # Copy weather trades
+    - crypto   # Copy crypto trades
+    - all      # Copy any trade we can map
+
+kalshi:
+  api_key_id: "demo"
+  api_key: "demo"
+  demo: false  # LIVE trading
