@@ -62,16 +62,16 @@ strategies:
     dry_run: true
     scan_interval: 1800
   crypto_momentum:
-    enabled: false           # DISABLED - Lost 52% of bankroll
+    enabled: true            # ENABLED - Testing FIXED algorithm
+    allocation: 1.00         # 100% for demo testing
+    dry_run: false           # Trade on demo environment
+    scan_interval: 60        # Check every minute
+  longshot_weather:
+    enabled: false           # Disabled - testing CryptoMomentum fix
     allocation: 0.00
     dry_run: true
-    scan_interval: 300
-  longshot_weather:
-    enabled: true
-    allocation: 1.00         # 100% for paper trading test
-    dry_run: false           # Will trade on demo environment
-    scan_interval: 1800      # 30 minutes
-    max_position_size: 5     # Normal position size for testing
+    scan_interval: 1800
+    max_position_size: 3
 
 # Logging
 log_level: INFO
