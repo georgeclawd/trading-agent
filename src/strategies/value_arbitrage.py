@@ -370,13 +370,16 @@ class ValueArbitrageStrategy(BaseStrategy):
                 logger.warning(f"   No ask price available")
                 return
             
-            # Execute order
-            order = self.client.create_order(
-                ticker=ticker,
-                side='buy',
-                type='limit',
-                yes=(side == 'YES'),
-                no=(side == 'NO'),
+            # Execute order using KalshiClient's place_order method
+            # Convert YES/NO to side ('buy') and determine which side of market
+            if side == 'YES':
+                order_side = 'yes'
+            else:
+                order_side = 'no'
+            
+            order = self.client.place_order(
+                market_id=ticker,
+                side=order_side,
                 price=price,
                 count=size
             )
