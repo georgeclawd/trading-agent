@@ -197,12 +197,15 @@ class PureCopyStrategy(BaseStrategy):
         position_key = (competitor, crypto, side)
         
         if position_key not in self.open_positions:
+            logger.debug(f"   No position to exit for {position_key}")
             return
         
         pos = self.open_positions[position_key]
         ticker = pos['ticker']
         size = pos['size']
         entry_price = pos['entry_price']
+        
+        logger.info(f"   🔄 Exiting {ticker} {side} x{size} @ entry {entry_price}c")
         
         if not ticker:
             logger.warning(f"   No ticker for {crypto}, can't exit")
@@ -226,12 +229,14 @@ class PureCopyStrategy(BaseStrategy):
         
         # Use best bid
         exit_price = int(book_side[0].get('price', entry_price))
+        logger.info(f"   📊 Best bid: {exit_price}c, Entry: {entry_price}c")
         
         # Place sell order
         sell_side = side.lower()
         result = self.client.place_order(ticker, sell_side, exit_price, size)
+        logger.info(f"   📤 Sell order result: {result}")
         
-        if result.get('success'):
+        if result.get('success') or result.get('order_id'):
             # Calculate P&L
             entry_cost = size * entry_price * 0.01
             exit_value = size * exit_price * 0.01
@@ -258,7 +263,7 @@ class PureCopyStrategy(BaseStrategy):
             logger.info(f"   {emoji} EXITED: {competitor} {crypto} {side} x{size}")
             logger.info(f"      Entry: {entry_price}c | Exit: {exit_price}c | P&L: ${pnl:.2f} ({pnl_pct:+.1f}%)")
         else:
-            logger.warning(f"   ❌ Failed to exit: {result.get('error', 'Unknown')}")
+            logger.warning(f"   ❌ Failed to exit: {result}")
     
     def _update_bankroll(self):
         """Update our bankroll from Kalshi"""
