@@ -230,7 +230,16 @@ class PureCopyStrategy(BaseStrategy):
                 # Log status periodically
                 now = datetime.now(timezone.utc)
                 time_to_close = (self.current_window_end - now).total_seconds() if self.current_window_end else 0
-                logger.info(f"💰 Bankroll: ${self.our_bankroll:.2f} | Window closes in {int(time_to_close/60)}m | Markets: {list(self.active_markets.keys())}")
+                time_to_close_min = int(time_to_close/60)
+                
+                # STOP TRADING 3 minutes before window close (liquidity collapse)
+                if time_to_close < 180:  # 3 minutes
+                    if time_to_close > 0:
+                        logger.info(f"⏰ Window closing in {time_to_close_min}m - LIQUIDITY LOCKDOWN - No new trades")
+                        await asyncio.sleep(10)
+                        continue
+                
+                logger.info(f"💰 Bankroll: ${self.our_bankroll:.2f} | Window closes in {time_to_close_min}m | Markets: {list(self.active_markets.keys())}")
                 
                 # Poll for trades
                 activity = tracker.get_user_activity(self.competitor_address, limit=10)
