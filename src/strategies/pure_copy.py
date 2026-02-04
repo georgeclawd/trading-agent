@@ -343,11 +343,11 @@ class PureCopyStrategy(BaseStrategy):
                     elif crypto == 'SOLANA':
                         crypto = 'SOL'
                     
-                    # Get Polymarket expiration timestamp
+                    # Get Polymarket OPEN timestamp (when window starts)
                     try:
                         pm_timestamp = int(parts[3])
-                        pm_close_dt = datetime.fromtimestamp(pm_timestamp, tz=timezone.utc)
-                        pm_close_str = pm_close_dt.strftime('%H:%M UTC')
+                        pm_open_dt = datetime.fromtimestamp(pm_timestamp, tz=timezone.utc)
+                        pm_open_str = pm_open_dt.strftime('%H:%M UTC')
                     except:
                         logger.debug(f"Could not parse timestamp from {slug}")
                         continue
@@ -355,28 +355,28 @@ class PureCopyStrategy(BaseStrategy):
                     if crypto not in self.active_markets:
                         continue
                     
-                    # Verify Kalshi market matches Polymarket expiration
+                    # Verify Kalshi market matches Polymarket OPEN time
                     kalshi_ticker = self.active_markets[crypto]
                     try:
                         r = self.client._request("GET", f"/markets/{kalshi_ticker}")
                         if r.status_code == 200:
-                            kalshi_close = r.json().get('market', {}).get('close_time', '')
-                            if kalshi_close:
-                                kalshi_dt = datetime.fromisoformat(kalshi_close.replace('Z', '+00:00'))
+                            kalshi_open = r.json().get('market', {}).get('open_time', '')
+                            if kalshi_open:
+                                kalshi_dt = datetime.fromisoformat(kalshi_open.replace('Z', '+00:00'))
                                 # Check if they match (within 1 minute)
-                                time_diff = abs((kalshi_dt - pm_close_dt).total_seconds())
+                                time_diff = abs((kalshi_dt - pm_open_dt).total_seconds())
                                 if time_diff > 60:  # More than 1 minute difference
-                                    logger.info(f"⏭️  Skipping {crypto} - expiration mismatch")
-                                    logger.info(f"   PM: {pm_close_str} | Kalshi: {kalshi_dt.strftime('%H:%M UTC')} | Diff: {int(time_diff/60)}m")
+                                    logger.info(f"⏭️  Skipping {crypto} - window mismatch")
+                                    logger.info(f"   PM open: {pm_open_str} | Kalshi open: {kalshi_dt.strftime('%H:%M UTC')} | Diff: {int(time_diff/60)}m")
                                     continue
                                 else:
-                                    logger.info(f"✅ {crypto} expiration MATCH: {pm_close_str}")
+                                    logger.info(f"✅ {crypto} window MATCH: {pm_open_str}")
                             else:
                                 continue
                         else:
                             continue
                     except Exception as e:
-                        logger.debug(f"Error checking Kalshi expiration: {e}")
+                        logger.debug(f"Error checking Kalshi open time: {e}")
                         continue
                     
                     logger.info(f"🚨 distinct-baguette: {side} {crypto} ${size_usd:.2f} @ {price:.2f}")
