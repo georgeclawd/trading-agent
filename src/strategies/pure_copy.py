@@ -61,6 +61,60 @@ class PureCopyStrategy(BaseStrategy):
         self.trade_queue = deque()
         self.max_retries = 10
         self.max_queue_age_seconds = 600  # 10 minutes max in queue
+        
+        # Bankroll management
+        self.max_exposure_pct = 0.30  # Max 30% of bankroll in open positions
+        self.min_trade_size = 1
+        self.max_trade_size = 5
+        self.open_exposure = 0.0  # Track current exposure in USD
+    
+    def _update_bankroll(self):
+        """Update our bankroll from Kalshi"""
+        try:
+            balance_data = self.client.get_balance()
+            if balance_data and 'balance' in balance_data:
+                self.our_bankroll = balance_data['balance'] / 100.0
+        except Exception as e:
+            logger.debug(f"Could not update bankroll: {e}")
+    
+    def _get_position_size(self, competitor: str, trade_size_usd: float, price: float) -> int:
+        """Calculate position size based on competitor's trade relative to their bankroll"""
+        competitor_bankroll = self.competitor_bankrolls.get(competitor, 50000)
+        
+        # What % of their bankroll did they trade?
+        their_trade_pct = trade_size_usd / competitor_bankroll
+        
+        # Apply same % to our bankroll
+        our_trade_usd = self.our_bankroll * their_trade_pct
+        
+        # Convert to contracts (size / price)
+        if price > 0:
+            contracts = int(our_trade_usd / (price * 10))  # price is in cents (0-99)
+        else:
+            contracts = 1
+        
+        # Apply limits
+        contracts = max(self.min_trade_size, min(contracts, self.max_trade_size))
+        
+        # Check if we'd exceed max exposure
+        max_allowed_exposure = self.our_bankroll * self.max_exposure_pct
+        if self.open_exposure + (contracts * price * 0.1) > max_allowed_exposure:
+            # Reduce size to stay under limit
+            remaining = max_allowed_exposure - self.open_exposure
+            if remaining > 0:
+                contracts = int(remaining / (price * 0.1))
+                contracts = max(0, contracts)
+            else:
+                contracts = 0
+        
+        if contracts == 0:
+            logger.warning(f"   ⚠️  Skipping: max exposure reached (${self.open_exposure:.2f} / ${max_allowed_exposure:.2f})")
+        
+        return contracts
+    
+    def _update_exposure(self, contracts: int, price: float):
+        """Update tracked exposure when trade is executed"""
+        self.open_exposure += contracts * price * 0.1  # Approximate USD value
     
     def _get_crypto(self, slug: str) -> Optional[str]:
         """Detect crypto from Polymarket slug"""
@@ -159,6 +213,7 @@ class PureCopyStrategy(BaseStrategy):
                 'competitor': qt.competitor,
                 'retries': qt.retry_count
             })
+            self._update_exposure(qt.size, qt.price)
             return True
         else:
             error = result.get('error', '')
@@ -229,7 +284,16 @@ class PureCopyStrategy(BaseStrategy):
         side = trade.get('side', 'BUY')
         kalshi_side = 'YES' if side == 'BUY' else 'NO'
         price = int(float(trade.get('price', 0.5)) * 100)
-        size = 1  # Fixed size for now
+        
+        # Get competitor's trade size
+        trade_size_usd = float(trade.get('usdcSize', 0))
+        if trade_size_usd == 0:
+            trade_size_usd = float(trade.get('size', 0))
+        
+        # Calculate position size based on bankroll ratio
+        size = self._get_position_size(competitor, trade_size_usd, price)
+        if size == 0:
+            return  # Max exposure reached
         
         # Create queued trade
         qt = QueuedTrade(
@@ -244,6 +308,7 @@ class PureCopyStrategy(BaseStrategy):
         
         # Try to execute immediately
         if await self._execute_trade(qt):
+            self._update_exposure(size, price)
             return
         
         # If failed, add to queue
@@ -292,9 +357,11 @@ class PureCopyStrategy(BaseStrategy):
         poll_count = 0
         while self._running:
             try:
-                # Refresh markets every 10 polls
+                # Refresh markets and bankroll every 10 polls
                 if poll_count % 10 == 0:
                     self._refresh_kalshi_markets()
+                    self._update_bankroll()
+                    logger.info(f"💰 Bankroll: ${self.our_bankroll:.2f}, Exposure: ${self.open_exposure:.2f} ({self.open_exposure/self.our_bankroll*100:.1f}%)")
                 
                 await self._poll_once()
                 poll_count += 1
