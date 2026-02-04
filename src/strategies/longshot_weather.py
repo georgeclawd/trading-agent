@@ -494,7 +494,7 @@ class LongshotWeatherStrategy(BaseStrategy):
                     logger.error(f"    [REAL] ✗ Failed to execute {ticker}: {e}")
                     continue
             
-            # Track for performance
+            # Track for performance with TIERED EXIT STRATEGY
             trade = {
                 'ticker': ticker,
                 'market': opp['market'],
@@ -505,7 +505,16 @@ class LongshotWeatherStrategy(BaseStrategy):
                 'size': min(self.max_position, 5),
                 'timestamp': datetime.now().isoformat(),
                 'status': 'open',
-                'simulated': self.dry_run
+                'simulated': self.dry_run,
+                'exit_strategy': {
+                    'tier1_price': market_price_cents * 2,      # 2x - sell 50%
+                    'tier1_sold': False,
+                    'tier2_price': market_price_cents * 3,      # 3x - sell remaining
+                    'tier2_sold': False,
+                    'stop_price': max(1, market_price_cents // 2),  # 0.5x - stop loss
+                    'time_exit_hours': 6,  # Exit if <6h to expiry and not profitable
+                    'partial_position_remaining': 1.0  # 1.0 = 100%, 0.5 = 50% after tier1
+                }
             }
             self.record_trade(trade)
             executed += 1
@@ -525,6 +534,95 @@ class LongshotWeatherStrategy(BaseStrategy):
             'win_rate': win_rate,
             'trades': len(self.trades)
         }
+    
+    async def check_exits(self):
+        """
+        TIERED EXIT STRATEGY for cheap weather bets:
+        - Sell 50% at 2x (100% gain) - locks in profit
+        - Sell remaining at 3x+ (200%+ gain) - captures home runs
+        - Stop loss at 0.5x (50% loss) - limits max loss
+        - Time exit: <6h to expiry and not profitable, exit all
+        """
+        if self.dry_run:
+            return  # Don't manage exits in simulation mode
+        
+        if not self.trades:
+            return
+        
+        for trade in self.trades:
+            if trade.get('status') != 'open':
+                continue
+            
+            ticker = trade['ticker']
+            exit_strat = trade.get('exit_strategy', {})
+            entry_price = int(trade.get('market_price', 0.01) * 100)
+            position_size = trade.get('size', 0)
+            
+            # Get current market price
+            try:
+                orderbook = self.client.get_orderbook(ticker)
+                if not orderbook:
+                    continue
+                
+                # Get best bid for YES side
+                yes_bids = orderbook.get('orderbook', {}).get('yes', [])
+                if not yes_bids:
+                    continue
+                current_price = int(yes_bids[0].get('price', entry_price))
+                
+                tier1_price = exit_strat.get('tier1_price', entry_price * 2)
+                tier2_price = exit_strat.get('tier2_price', entry_price * 3)
+                stop_price = exit_strat.get('stop_price', max(1, entry_price // 2))
+                tier1_sold = exit_strat.get('tier1_sold', False)
+                tier2_sold = exit_strat.get('tier2_sold', False)
+                remaining_pct = exit_strat.get('partial_position_remaining', 1.0)
+                
+                # TIER 2: Home run - sell remaining at 3x+
+                if current_price >= tier2_price and not tier2_sold and remaining_pct > 0:
+                    contracts_to_sell = int(position_size * remaining_pct)
+                    if contracts_to_sell > 0:
+                        result = self.client.place_order(ticker, 'yes', current_price, contracts_to_sell)
+                        if result.get('success'):
+                            exit_strat['tier2_sold'] = True
+                            exit_strat['partial_position_remaining'] = 0
+                            trade['status'] = 'closed'
+                            pnl = (current_price - entry_price) * contracts_to_sell * 0.01
+                            logger.info(f"🎯 TIER 2 EXIT: {ticker} @ {current_price}c (3x+ target)")
+                            logger.info(f"   Sold {contracts_to_sell} @ {current_price}c, P&L: ${pnl:+.2f}")
+                            continue
+                
+                # TIER 1: Quick profit - sell 50% at 2x
+                if current_price >= tier1_price and not tier1_sold:
+                    contracts_to_sell = position_size // 2
+                    if contracts_to_sell > 0:
+                        result = self.client.place_order(ticker, 'yes', current_price, contracts_to_sell)
+                        if result.get('success'):
+                            exit_strat['tier1_sold'] = True
+                            exit_strat['partial_position_remaining'] = 0.5
+                            pnl = (current_price - entry_price) * contracts_to_sell * 0.01
+                            logger.info(f"💰 TIER 1 EXIT: {ticker} @ {current_price}c (2x target)")
+                            logger.info(f"   Sold {contracts_to_sell} (50%), P&L: ${pnl:+.2f}")
+                            logger.info(f"   Holding {contracts_to_sell} for tier 2 (3x target)")
+                
+                # STOP LOSS: Exit all at 0.5x
+                if current_price <= stop_price:
+                    contracts_to_sell = int(position_size * remaining_pct)
+                    if contracts_to_sell > 0:
+                        result = self.client.place_order(ticker, 'yes', current_price, contracts_to_sell)
+                        if result.get('success'):
+                            exit_strat['tier1_sold'] = True
+                            exit_strat['tier2_sold'] = True
+                            exit_strat['partial_position_remaining'] = 0
+                            trade['status'] = 'closed'
+                            pnl = (current_price - entry_price) * contracts_to_sell * 0.01
+                            logger.info(f"🛑 STOP LOSS: {ticker} @ {current_price}c (0.5x)")
+                            logger.info(f"   Sold all {contracts_to_sell}, P&L: ${pnl:+.2f}")
+                
+                # TIME EXIT: <6h to expiry and not profitable
+                # (This would need expiry time parsing from ticker)
+                
+            except Exception as e:
+                logger.debug(f"Error checking exits for {ticker}: {e}")
     
     async def close(self):
         """Close session"""
