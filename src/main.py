@@ -170,51 +170,25 @@ class TradingAgent:
             raise Exception("Kalshi API connection failed")
         logger.info("✅ Kalshi connected successfully")
         
-        # Register Weather Prediction Strategy (DRY RUN)
-        weather_cfg = self.config.get('strategies', {}).get('weather_prediction', {})
-        if weather_cfg.get('enabled', True):
-            weather_strategy = WeatherPredictionStrategy(
-                config={**self.config, 'dry_run': weather_cfg.get('dry_run', True)},
-                client=self.kalshi_client,
-                market_scanner=self.market_scanner,
-                position_manager=self.position_manager
-            )
-            allocation = weather_cfg.get('allocation', 0.25)
-            self.strategy_manager.register_strategy(weather_strategy, allocation)
+        # DISABLED: Weather Prediction Strategy - needs refinement
+        # weather_cfg = self.config.get('strategies', {}).get('weather_prediction', {})
+        # if weather_cfg.get('enabled', True):
+        #     weather_strategy = WeatherPredictionStrategy(...)
         
-        # Register Spread Trading Strategy (DRY RUN)
-        spread_cfg = self.config.get('strategies', {}).get('spread_trading', {})
-        if spread_cfg.get('enabled', True):
-            spread_strategy = SpreadTradingStrategy(
-                config={**self.config, 'dry_run': spread_cfg.get('dry_run', True)},
-                client=self.kalshi_client,
-                position_manager=self.position_manager
-            )
-            allocation = spread_cfg.get('allocation', 0.25)
-            self.strategy_manager.register_strategy(spread_strategy, allocation)
+        # DISABLED: Spread Trading Strategy - focus on copy trading only
+        # spread_cfg = self.config.get('strategies', {}).get('spread_trading', {})
+        # if spread_cfg.get('enabled', True):
+        #     spread_strategy = SpreadTradingStrategy(...)
         
-        # Register Crypto Momentum Strategy (REAL MONEY!)
-        crypto_cfg = self.config.get('strategies', {}).get('crypto_momentum', {})
-        if crypto_cfg.get('enabled', True):
-            crypto_strategy = CryptoMomentumStrategy(
-                config={**self.config, 'dry_run': crypto_cfg.get('dry_run', False)},
-                client=self.kalshi_client,
-                position_manager=self.position_manager
-            )
-            allocation = crypto_cfg.get('allocation', 0.25)
-            self.strategy_manager.register_strategy(crypto_strategy, allocation)
+        # DISABLED: Crypto Momentum Strategy - focus on copy trading only
+        # crypto_cfg = self.config.get('strategies', {}).get('crypto_momentum', {})
+        # if crypto_cfg.get('enabled', True):
+        #     crypto_strategy = CryptoMomentumStrategy(...)
         
-        # Register Longshot Weather Strategy ($64K bot algorithm) (DRY RUN)
-        longshot_cfg = self.config.get('strategies', {}).get('longshot_weather', {})
-        if longshot_cfg.get('enabled', True):
-            longshot_strategy = LongshotWeatherStrategy(
-                config={**self.config, 'dry_run': longshot_cfg.get('dry_run', True)},
-                client=self.kalshi_client,
-                market_scanner=self.market_scanner,
-                position_manager=self.position_manager
-            )
-            allocation = longshot_cfg.get('allocation', 0.25)
-            self.strategy_manager.register_strategy(longshot_strategy, allocation)
+        # DISABLED: Longshot Weather Strategy - needs refinement
+        # longshot_cfg = self.config.get('strategies', {}).get('longshot_weather', {})
+        # if longshot_cfg.get('enabled', True):
+        #     longshot_strategy = LongshotWeatherStrategy(...)
         
         # Register Pure Copy Strategy (LIVE - Copy competitors)
         if PURE_COPY_AVAILABLE:
