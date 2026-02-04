@@ -219,29 +219,48 @@ class PureCopyStrategy(BaseStrategy):
         
         # Get current market price
         logger.info(f"   📊 Fetching orderbook for {ticker}...")
-        orderbook = self.client.get_orderbook(ticker)
+        try:
+            orderbook = self.client.get_orderbook(ticker)
+            logger.info(f"   📊 Orderbook type: {type(orderbook)}")
+        except Exception as e:
+            logger.error(f"   ❌ Error fetching orderbook: {e}")
+            return
+        
         if not orderbook:
-            logger.warning(f"   ❌ Can't get orderbook for {ticker}")
+            logger.warning(f"   ❌ Orderbook is empty/None for {ticker}")
             return
         
         # Determine sell price (bid side)
-        if side == 'YES':
-            book_side = orderbook.get('orderbook', {}).get('yes', [])
-        else:
-            book_side = orderbook.get('orderbook', {}).get('no', [])
+        try:
+            if side == 'YES':
+                book_side = orderbook.get('orderbook', {}).get('yes', [])
+            else:
+                book_side = orderbook.get('orderbook', {}).get('no', [])
+            logger.info(f"   📊 Book side ({side}): {book_side[:2] if book_side else 'EMPTY'}")
+        except Exception as e:
+            logger.error(f"   ❌ Error parsing orderbook: {e}")
+            return
         
         if not book_side:
-            logger.warning(f"   No liquidity for {ticker} {side}")
+            logger.warning(f"   ❌ No liquidity for {ticker} {side}")
             return
         
         # Use best bid
-        exit_price = int(book_side[0].get('price', entry_price))
-        logger.info(f"   📊 Best bid: {exit_price}c, Entry: {entry_price}c")
+        try:
+            exit_price = int(book_side[0].get('price', entry_price))
+            logger.info(f"   📊 Best bid: {exit_price}c, Entry: {entry_price}c")
+        except Exception as e:
+            logger.error(f"   ❌ Error getting exit price: {e}")
+            return
         
         # Place sell order
-        sell_side = side.lower()
-        result = self.client.place_order(ticker, sell_side, exit_price, size)
-        logger.info(f"   📤 Sell order result: {result}")
+        logger.info(f"   📤 Placing sell: {ticker} {side.lower()} {exit_price}c x{size}")
+        try:
+            result = self.client.place_order(ticker, side.lower(), exit_price, size)
+            logger.info(f"   📤 Result: {result}")
+        except Exception as e:
+            logger.error(f"   ❌ Error placing order: {e}")
+            return
         
         if result.get('success') or result.get('order_id'):
             # Calculate P&L
