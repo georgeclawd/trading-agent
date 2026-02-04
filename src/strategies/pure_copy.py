@@ -208,13 +208,20 @@ class PureCopyStrategy(BaseStrategy):
         logger.info(f"   🔄 Exiting {ticker} {side} x{size} @ entry {entry_price}c")
         
         if not ticker:
-            logger.warning(f"   No ticker for {crypto}, can't exit")
-            return
+            logger.warning(f"   ❌ No ticker stored for {crypto}, can't exit")
+            logger.info(f"   Trying to find ticker from kalshi_markets: {self.kalshi_markets}")
+            # Try to reconstruct ticker
+            ticker = self.kalshi_markets.get(crypto)
+            if not ticker:
+                logger.warning(f"   ❌ Still no ticker, skipping exit")
+                return
+            logger.info(f"   ✓ Found ticker from kalshi_markets: {ticker}")
         
         # Get current market price
+        logger.info(f"   📊 Fetching orderbook for {ticker}...")
         orderbook = self.client.get_orderbook(ticker)
         if not orderbook:
-            logger.warning(f"   Can't get orderbook for {ticker}")
+            logger.warning(f"   ❌ Can't get orderbook for {ticker}")
             return
         
         # Determine sell price (bid side)
