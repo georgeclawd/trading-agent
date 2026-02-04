@@ -40,7 +40,11 @@ class PureCopyStrategy(BaseStrategy):
         self.our_bankroll = 21.70  # Will update dynamically
         self.max_position_pct = 0.10  # Max 10% per trade
         
+        # Track open positions for exit-at-5-min logic
+        self.open_positions = {}  # crypto -> {size, side, entry_price}
+        
         logger.info("🚀 PureCopy initialized - CURRENT WINDOW ONLY mode")
+        logger.info("   Strategy: Exit all positions 5 min before window close")
     
     def _get_current_window_times(self):
         """Get start and end of current 15-min window"""
@@ -126,6 +130,37 @@ class PureCopyStrategy(BaseStrategy):
         else:
             return 3
     
+    def _log_market_prices(self):
+        """Log current market prices for all active markets (for proof)"""
+        logger.info("📊 MARKET PRICE CHECK:")
+        for crypto, ticker in self.active_markets.items():
+            try:
+                r = self.client._request("GET", f"/markets/{ticker}")
+                if r.status_code == 200:
+                    m = r.json().get('market', {})
+                    yes_bid = m.get('yes_bid', 0)
+                    yes_ask = m.get('yes_ask', 0)
+                    last = m.get('last_price', 0)
+                    logger.info(f"   {crypto}: yes_bid={yes_bid}c, yes_ask={yes_ask}c, last={last}c")
+                else:
+                    logger.info(f"   {crypto}: Error {r.status_code}")
+            except Exception as e:
+                logger.info(f"   {crypto}: Error {e}")
+    
+    async def _exit_all_positions(self):
+        """Exit all open positions at current market price"""
+        logger.info(f"   Exiting {len(self.open_positions)} positions...")
+        for crypto, pos in list(self.open_positions.items()):
+            size = pos['size']
+            side = pos['side']
+            logger.info(f"   Selling {crypto} {side} x{size}")
+            success = self._execute_exit(crypto, side, size)
+            if success:
+                del self.open_positions[crypto]
+                logger.info(f"   ✅ Exited {crypto}")
+            else:
+                logger.warning(f"   ❌ Failed to exit {crypto}")
+    
     def _execute_trade(self, crypto: str, side: str, price_cents: int, size: int) -> bool:
         """Execute a single trade immediately"""
         ticker = self.active_markets.get(crypto)
@@ -151,6 +186,19 @@ class PureCopyStrategy(BaseStrategy):
             result = self.client.place_order(ticker, side.lower(), price_cents, size)
             if result.get('success') or result.get('order_id'):
                 logger.info(f"  ✅ Executed! Order: {result.get('order_id', 'N/A')[:16]}...")
+                # Track position for exit logic
+                if crypto in self.open_positions:
+                    # Add to existing position
+                    old = self.open_positions[crypto]
+                    old['size'] += size
+                    old['entry_price'] = (old['entry_price'] + price_cents) / 2  # Avg
+                else:
+                    self.open_positions[crypto] = {
+                        'size': size,
+                        'side': side,
+                        'entry_price': price_cents,
+                        'ticker': ticker
+                    }
                 return True
             else:
                 logger.warning(f"  ❌ Failed: {result}")
@@ -193,6 +241,9 @@ class PureCopyStrategy(BaseStrategy):
             
             if result.get('success') or result.get('order_id'):
                 logger.info(f"  ✅ Exited! Order: {result.get('order_id', 'N/A')[:16]}...")
+                # Remove from tracking
+                if crypto in self.open_positions:
+                    del self.open_positions[crypto]
                 return True
             else:
                 logger.warning(f"  ❌ Exit failed: {result}")
@@ -232,14 +283,25 @@ class PureCopyStrategy(BaseStrategy):
                 time_to_close = (self.current_window_end - now).total_seconds() if self.current_window_end else 0
                 time_to_close_min = int(time_to_close/60)
                 
-                # STOP TRADING 3 minutes before window close (liquidity collapse)
+                # LOG MARKET PRICES every minute (for proof of price action)
+                if int(time_to_close) % 60 == 0:  # Once per minute
+                    self._log_market_prices()
+                
+                # EXIT ALL at 5 minutes before close
+                if 240 < time_to_close <= 300 and self.open_positions:  # Between 4-5 min left
+                    logger.info(f"⏰ 5 MIN WARNING - EXITING ALL POSITIONS")
+                    await self._exit_all_positions()
+                    await asyncio.sleep(5)
+                    continue
+                
+                # STOP NEW TRADES 3 minutes before window close
                 if time_to_close < 180:  # 3 minutes
                     if time_to_close > 0:
                         logger.info(f"⏰ Window closing in {time_to_close_min}m - LIQUIDITY LOCKDOWN - No new trades")
                         await asyncio.sleep(10)
                         continue
                 
-                logger.info(f"💰 Bankroll: ${self.our_bankroll:.2f} | Window closes in {time_to_close_min}m | Markets: {list(self.active_markets.keys())}")
+                logger.info(f"💰 Bankroll: ${self.our_bankroll:.2f} | Window closes in {time_to_close_min}m | Positions: {list(self.open_positions.keys())}")
                 
                 # Poll for trades
                 activity = tracker.get_user_activity(self.competitor_address, limit=10)
