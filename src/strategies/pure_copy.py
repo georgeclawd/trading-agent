@@ -508,13 +508,8 @@ class PureCopyStrategy(BaseStrategy):
         position_key = (competitor, crypto, kalshi_side)
         opposite_key = (competitor, crypto, 'NO' if kalshi_side == 'YES' else 'YES')
         
-        # CASE 1: Competitor is BUYING - we BUY too (if no position yet)
+        # CASE 1: Competitor is BUYING - we BUY too (allow doubling down)
         if side == 'BUY':
-            # Check if we already have a position in this direction
-            if position_key in self.open_positions:
-                logger.info(f"   ⏭️  Already long {crypto} {kalshi_side}, skipping")
-                return
-            
             # Check if we have opposite position - should we flip?
             if opposite_key in self.open_positions:
                 logger.info(f"   🔄 Competitor flipped! Selling our {crypto} {'NO' if kalshi_side == 'YES' else 'YES'} position")
@@ -522,7 +517,7 @@ class PureCopyStrategy(BaseStrategy):
                 # Don't immediately buy - wait for next signal
                 return
             
-            # New position - calculate size and buy
+            # Buy (even if already long - allows doubling down)
             size = self._get_position_size(competitor, trade_size_usd, price)
             if size == 0:
                 return  # Max exposure reached
@@ -538,14 +533,23 @@ class PureCopyStrategy(BaseStrategy):
             )
             
             if await self._execute_trade(qt):
-                # Track open position
-                self.open_positions[position_key] = {
-                    'size': size,
-                    'entry_price': price,
-                    'ticker': self.kalshi_markets.get(crypto),
-                    'timestamp': datetime.now(timezone.utc)
-                }
-                logger.info(f"   📈 Opened position: {competitor} {crypto} {kalshi_side} x{size} @ {price}c")
+                # Track/add to open position
+                if position_key in self.open_positions:
+                    # Doubling down - update average price
+                    old = self.open_positions[position_key]
+                    total_size = old['size'] + size
+                    avg_price = (old['entry_price'] * old['size'] + price * size) / total_size
+                    old['size'] = total_size
+                    old['entry_price'] = avg_price
+                    logger.info(f"   📈 DOUBLED DOWN: {competitor} {crypto} {kalshi_side} now x{total_size} @ {avg_price:.0f}c avg")
+                else:
+                    self.open_positions[position_key] = {
+                        'size': size,
+                        'entry_price': price,
+                        'ticker': self.kalshi_markets.get(crypto),
+                        'timestamp': datetime.now(timezone.utc)
+                    }
+                    logger.info(f"   📈 Opened position: {competitor} {crypto} {kalshi_side} x{size} @ {price}c")
                 return
             
             self.trade_queue.append(qt)
