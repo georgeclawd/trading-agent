@@ -110,6 +110,85 @@ class PolymarketTracker:
         
         return []
     
+    def get_market_by_slug(self, slug: str) -> Optional[Dict]:
+        """
+        Get market data by slug
+        
+        Args:
+            slug: Market slug (e.g., "bitcoin-updown-15m-1234567890")
+            
+        Returns:
+            Market data dict or None
+        """
+        endpoint = f"/markets/{slug}"
+        
+        data = self._make_request(endpoint)
+        
+        if data:
+            logger.debug(f"Fetched market data for {slug}")
+            return data
+        
+        return None
+    
+    def get_active_markets(self, limit: int = 100) -> List[Dict]:
+        """
+        Get currently active markets from Gamma API
+        
+        Args:
+            limit: Number of markets to fetch
+            
+        Returns:
+            List of active markets
+        """
+        try:
+            url = "https://gamma-api.polymarket.com/markets"
+            params = {
+                "active": "true",
+                "closed": "false",
+                "limit": limit
+            }
+            
+            response = self.session.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                markets = response.json()
+                logger.debug(f"Fetched {len(markets)} active markets from Gamma API")
+                return markets
+            else:
+                logger.warning(f"Gamma API error {response.status_code}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch markets: {e}")
+            return []
+    
+    def get_market_by_slug(self, slug: str) -> Optional[Dict]:
+        """
+        Get market data by slug from Gamma API
+        
+        Args:
+            slug: Market slug (e.g., "bitcoin-updown-15m-1234567890")
+            
+        Returns:
+            Market data dict or None
+        """
+        try:
+            url = f"https://gamma-api.polymarket.com/markets"
+            params = {"slug": slug}
+            
+            response = self.session.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                markets = response.json()
+                if markets and len(markets) > 0:
+                    return markets[0]
+            
+            return None
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch market by slug: {e}")
+            return None
+    
     def get_user_positions(self, address: str) -> List[Dict]:
         """
         Get current positions for a user

@@ -15,10 +15,10 @@ from typing import Dict, List, Optional
 from strategy_framework import StrategyManager
 from strategies import WeatherPredictionStrategy, SpreadTradingStrategy, CryptoMomentumStrategy, LongshotWeatherStrategy
 try:
-    from strategies.pure_copy import PureCopyStrategy
-    PURE_COPY_AVAILABLE = True
+    from strategies.value_arbitrage import ValueArbitrageStrategy
+    VALUE_ARB_AVAILABLE = True
 except ImportError:
-    PURE_COPY_AVAILABLE = False
+    VALUE_ARB_AVAILABLE = False
 from position_manager import PositionManager
 
 # Legacy components
@@ -190,21 +190,21 @@ class TradingAgent:
         # if longshot_cfg.get('enabled', True):
         #     longshot_strategy = LongshotWeatherStrategy(...)
         
-        # Register Pure Copy Strategy (LIVE - Copy competitors)
-        if PURE_COPY_AVAILABLE:
-            pure_copy_cfg = self.config.get('strategies', {}).get('PureCopy', {})
-            if pure_copy_cfg.get('enabled', False):
-                pure_copy_strategy = PureCopyStrategy(
-                    config={**self.config, 'dry_run': pure_copy_cfg.get('dry_run', False)},
+        # Register Value Arbitrage Strategy (LIVE - Find value bets)
+        if VALUE_ARB_AVAILABLE:
+            value_cfg = self.config.get('strategies', {}).get('ValueArbitrage', {})
+            if value_cfg.get('enabled', True):
+                value_strategy = ValueArbitrageStrategy(
+                    config={**self.config, 'dry_run': value_cfg.get('dry_run', True)},
                     client=self.kalshi_client,
                     position_manager=self.position_manager
                 )
-                allocation = pure_copy_cfg.get('allocation', 0.50)
+                allocation = value_cfg.get('allocation', 1.0)
                 # Ensure allocation is a fraction (0.0-1.0), not percentage
                 if allocation > 1.0:
                     allocation = allocation / 100.0
-                self.strategy_manager.register_strategy(pure_copy_strategy, allocation)
-                logger.info("✅ Pure Copy strategy registered - copying competitor trades")
+                self.strategy_manager.register_strategy(value_strategy, allocation)
+                logger.info("✅ Value Arbitrage strategy registered - finding mispriced opportunities")
         
         logger.info(f"✅ Registered {len(self.strategy_manager.strategies)} strategies")
         

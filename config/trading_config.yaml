@@ -3,14 +3,14 @@
 initial_bankroll: 100.0
 
 bot:
-  name: "Copy Trading Bot"
+  name: "Value Arbitrage Bot"
   dry_run: false  # LIVE TRADING
   check_interval: 10
   timezone: "UTC"  # Internal timezone
   display_timezone: "EST"  # Display for user (UTC-5)
 
 strategies:
-  # DISABLE all other strategies - only running PureCopy
+  # DISABLE all other strategies - only running ValueArbitrage
   weather_prediction:
     enabled: false
   spread_trading:
@@ -19,27 +19,21 @@ strategies:
     enabled: false
   crypto_momentum:
     enabled: false
-  
-  # ONLY PureCopy is enabled
   PureCopy:
+    enabled: false
+  
+  # ONLY ValueArbitrage is enabled
+  ValueArbitrage:
     enabled: true
     allocation: 100
-    dry_run: false
+    dry_run: true  # Start in simulation mode
     config:
-      competitors:
-        - name: "distinct-baguette"
-          address: "0xe00740bce98a594e26861838885ab310ec3b548c"
-        - name: "0x8dxd"
-          address: "0x63ce342161250d705dc0b16df89036c8e5f9ba9a"
-        - name: "k9Q2mX4L8A7ZP3R"
-          address: "0xd0d6053c3c37e727402d84c14069780d360993aa"
-      copy_sizing:
-        method: "bankroll_ratio"  # Size based on bankroll ratio
-        max_contracts: 10
-      poll_interval: 10  # seconds
+      min_edge: 0.10  # 10% minimum edge
+      max_position: 3  # Max contracts per bet
+      poll_interval: 30  # seconds between scans
 
 kalshi:
-  demo: false  # LIVE trading
+  demo: false  # LIVE trading (but strategy has dry_run)
 
 logging:
   level: "INFO"
