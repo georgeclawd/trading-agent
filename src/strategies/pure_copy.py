@@ -417,6 +417,21 @@ class PureCopyStrategy(BaseStrategy):
         
         qt.ticker = ticker
         
+        # Check market is still active (not expired/finalized)
+        try:
+            market_info = self.client._request("GET", f"/markets/{ticker}")
+            if market_info.status_code == 200:
+                status = market_info.json().get('market', {}).get('status', '')
+                if status != 'active':
+                    logger.warning(f"   Market {ticker} is {status}, not active - skipping")
+                    return False
+            else:
+                logger.debug(f"   Could not check market status for {ticker}")
+                return False
+        except Exception as e:
+            logger.debug(f"   Error checking market status: {e}")
+            return False
+        
         # Check market has liquidity
         orderbook = self.client.get_orderbook(ticker)
         if not orderbook:
