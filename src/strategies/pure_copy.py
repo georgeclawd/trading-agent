@@ -176,15 +176,13 @@ class PureCopyStrategy(BaseStrategy):
             
             market = response.json().get('market', {})
             
-            # Get yes_price or no_price (these are the current market prices)
+            # Get yes_bid or no_bid (for selling)
+            # API returns these as cents directly
             if side == 'YES':
-                # We're selling YES, use yes_price
-                price_str = market.get('yes_price', '0')
-                # price is in dollars like "0.87", convert to cents
-                exit_price = int(float(price_str) * 100)
+                # We're selling YES, use yes_bid (what buyers will pay)
+                exit_price = market.get('yes_bid', 0)
             else:
-                price_str = market.get('no_price', '0')
-                exit_price = int(float(price_str) * 100)
+                exit_price = market.get('no_bid', 0)
             
             if exit_price <= 0:
                 logger.warning(f"  Invalid price for {ticker}: {exit_price}c")
