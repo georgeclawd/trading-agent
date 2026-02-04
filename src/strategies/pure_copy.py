@@ -73,6 +73,22 @@ class PureCopyStrategy(BaseStrategy):
         # LIVE TRADING MODE
         self.observation_mode = False  # LIVE TRADING ENABLED
         self.cycle_stats = {}  # Track trades per cycle
+        
+        # TRADER PERFORMANCE TRACKING
+        self.trader_performance = {
+            name: {
+                'trades_count': 0,
+                'total_cost': 0.0,      # Total USD spent on contracts
+                'total_contracts': 0,   # Total contracts held
+                'avg_price': 0.0,       # Weighted average entry price
+                'realized_pnl': 0.0,    # Closed trade P&L
+                'unrealized_pnl': 0.0,  # Current open position value
+                'wins': 0,
+                'losses': 0,
+                'trades': []            # List of individual trades
+            }
+            for name in self.competitors.keys()
+        }
     
     def _log_cycle_stats(self):
         """Log statistics for the current cycle"""
@@ -112,6 +128,60 @@ class PureCopyStrategy(BaseStrategy):
         if total_would_spend > our_bankroll * 0.5:
             logger.warning(f"   ⚠️  INSUFFICIENT FUNDS! Need ${total_would_spend:.2f}, have ${our_bankroll:.2f}")
             logger.warning(f"   Recommend: Wait for settlement or add funds")
+    
+    def _track_trader_performance(self, trader: str, ticker: str, side: str, price: int, size: int):
+        """Track performance metrics for each trader"""
+        if trader not in self.trader_performance:
+            return
+        
+        perf = self.trader_performance[trader]
+        cost = size * price * 0.01  # Cost in USD
+        
+        perf['trades_count'] += 1
+        perf['total_cost'] += cost
+        perf['total_contracts'] += size
+        
+        # Update weighted average price
+        if perf['total_contracts'] > 0:
+            perf['avg_price'] = (perf['avg_price'] * (perf['total_contracts'] - size) + price * size) / perf['total_contracts']
+        
+        # Store trade details
+        perf['trades'].append({
+            'ticker': ticker,
+            'side': side,
+            'price': price,
+            'size': size,
+            'cost': cost,
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        })
+        
+        logger.info(f"   📊 Tracked: {trader} now has {perf['trades_count']} trades, ${perf['total_cost']:.2f} invested")
+    
+    def _log_trader_performance(self):
+        """Log performance summary for all traders"""
+        logger.info("=" * 70)
+        logger.info("📈 TRADER PERFORMANCE REPORT")
+        logger.info("=" * 70)
+        
+        # Sort by total cost (activity level)
+        sorted_traders = sorted(
+            self.trader_performance.items(),
+            key=lambda x: x[1]['total_cost'],
+            reverse=True
+        )
+        
+        for trader, perf in sorted_traders:
+            if perf['trades_count'] == 0:
+                continue
+            
+            logger.info(f"\n👤 {trader}:")
+            logger.info(f"   Trades: {perf['trades_count']}")
+            logger.info(f"   Total Invested: ${perf['total_cost']:.2f}")
+            logger.info(f"   Contracts: {perf['total_contracts']}")
+            logger.info(f"   Avg Price: {perf['avg_price']:.1f}c")
+            logger.info(f"   Realized P&L: ${perf['realized_pnl']:.2f}")
+        
+        logger.info("=" * 70)
         else:
             logger.info(f"   ✅ Bankroll sufficient for next cycle")
         
@@ -266,6 +336,10 @@ class PureCopyStrategy(BaseStrategy):
                 'retries': qt.retry_count
             })
             self._update_exposure(qt.size, qt.price)
+            
+            # TRACK TRADER PERFORMANCE
+            self._track_trader_performance(qt.competitor, ticker, qt.kalshi_side, qt.price, qt.size)
+            
             return True
         else:
             error = result.get('error', '')
@@ -438,9 +512,10 @@ class PureCopyStrategy(BaseStrategy):
                     # Window changed - log cycle stats and reset exposure
                     if self.observation_mode and self.cycle_stats:
                         self._log_cycle_stats()
-                    # Reset exposure tracking for new cycle
+                    # Reset exposure tracking for new cycle and log trader performance
                     if not self.observation_mode:
                         logger.info(f"🔄 New cycle starting - resetting exposure (was ${self.open_exposure:.2f})")
+                        self._log_trader_performance()
                         self.open_exposure = 0.0
                 last_window = current_window
                 
