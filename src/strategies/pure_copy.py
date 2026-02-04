@@ -67,6 +67,56 @@ class PureCopyStrategy(BaseStrategy):
         self.min_trade_size = 1
         self.max_trade_size = 5
         self.open_exposure = 0.0  # Track current exposure in USD
+        
+        # Observation mode - log trades without executing
+        self.observation_mode = True  # Set to False to enable live trading
+        self.cycle_stats = {}  # Track trades per cycle
+    
+    def _log_cycle_stats(self):
+        """Log statistics for the current cycle"""
+        if not self.cycle_stats:
+            return
+        
+        logger.info("=" * 70)
+        logger.info("📊 CYCLE OBSERVATION STATS")
+        logger.info("=" * 70)
+        
+        total_would_spend = 0
+        for competitor, stats in self.cycle_stats.items():
+            count = stats['count']
+            total_usd = stats['total_usd']
+            avg_usd = total_usd / count if count > 0 else 0
+            
+            logger.info(f"\n👤 {competitor}:")
+            logger.info(f"   Trades: {count}")
+            logger.info(f"   Total USD: ${total_usd:.2f}")
+            logger.info(f"   Avg per trade: ${avg_usd:.2f}")
+            
+            # Calculate what WE would spend
+            their_bankroll = self.competitor_bankrolls.get(competitor, 50000)
+            our_bankroll = 21.70  # Current bankroll
+            ratio = our_bankroll / their_bankroll
+            our_spend = total_usd * ratio
+            total_would_spend += our_spend
+            
+            logger.info(f"   Their bankroll: ${their_bankroll:,.0f}")
+            logger.info(f"   Our bankroll: ${our_bankroll:.2f}")
+            logger.info(f"   Ratio: {ratio:.4f}")
+            logger.info(f"   We would spend: ${our_spend:.2f}")
+        
+        logger.info(f"\n💰 TOTAL WE WOULD NEED PER CYCLE: ${total_would_spend:.2f}")
+        logger.info(f"   Current bankroll: ${our_bankroll:.2f}")
+        
+        if total_would_spend > our_bankroll * 0.5:
+            logger.warning(f"   ⚠️  INSUFFICIENT FUNDS! Need ${total_would_spend:.2f}, have ${our_bankroll:.2f}")
+            logger.warning(f"   Recommend: Wait for settlement or add funds")
+        else:
+            logger.info(f"   ✅ Bankroll sufficient for next cycle")
+        
+        logger.info("=" * 70)
+        
+        # Reset for next cycle
+        self.cycle_stats = {}
     
     def _update_bankroll(self):
         """Update our bankroll from Kalshi"""
@@ -290,6 +340,24 @@ class PureCopyStrategy(BaseStrategy):
         if trade_size_usd == 0:
             trade_size_usd = float(trade.get('size', 0))
         
+        # OBSERVATION MODE: Just log stats, don't trade
+        if self.observation_mode:
+            if competitor not in self.cycle_stats:
+                self.cycle_stats[competitor] = {'count': 0, 'total_usd': 0, 'trades': []}
+            
+            self.cycle_stats[competitor]['count'] += 1
+            self.cycle_stats[competitor]['total_usd'] += trade_size_usd
+            self.cycle_stats[competitor]['trades'].append({
+                'crypto': crypto,
+                'side': kalshi_side,
+                'usd': trade_size_usd,
+                'price': price
+            })
+            
+            logger.info(f"   👁️  OBSERVED: {competitor} {crypto} {kalshi_side} ${trade_size_usd:.2f} @ {price}c")
+            return
+        
+        # LIVE TRADING MODE
         # Calculate position size based on bankroll ratio
         size = self._get_position_size(competitor, trade_size_usd, price)
         if size == 0:
@@ -355,13 +423,30 @@ class PureCopyStrategy(BaseStrategy):
         self._refresh_kalshi_markets()
         
         poll_count = 0
+        last_window = None
+        
         while self._running:
             try:
+                # Detect cycle changes for observation stats
+                now_utc = datetime.now(timezone.utc)
+                now_est = now_utc - timedelta(hours=5)
+                current_minute = now_est.minute
+                current_window = current_minute // 15  # 0, 1, 2, or 3
+                
+                if last_window is not None and current_window != last_window:
+                    # Window changed - log cycle stats
+                    if self.observation_mode and self.cycle_stats:
+                        self._log_cycle_stats()
+                last_window = current_window
+                
                 # Refresh markets and bankroll every 10 polls
                 if poll_count % 10 == 0:
                     self._refresh_kalshi_markets()
-                    self._update_bankroll()
-                    logger.info(f"💰 Bankroll: ${self.our_bankroll:.2f}, Exposure: ${self.open_exposure:.2f} ({self.open_exposure/self.our_bankroll*100:.1f}%)")
+                    if not self.observation_mode:
+                        self._update_bankroll()
+                        logger.info(f"💰 Bankroll: ${self.our_bankroll:.2f}, Exposure: ${self.open_exposure:.2f} ({self.open_exposure/self.our_bankroll*100:.1f}%)")
+                    else:
+                        logger.info(f"👁️  OBSERVATION MODE - Watching competitors (bankroll: $21.70)")
                 
                 await self._poll_once()
                 poll_count += 1
