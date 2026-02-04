@@ -62,14 +62,16 @@ class PureCopyStrategy(BaseStrategy):
         self.max_retries = 10
         self.max_queue_age_seconds = 600  # 10 minutes max in queue
         
-        # Bankroll management
-        self.max_exposure_pct = 0.30  # Max 30% of bankroll in open positions
+        # Bankroll management - CONSERVATIVE with 20% safety margin
+        # Based on observation: $3-11 per cycle, using 25% max for safety
+        self.max_exposure_pct = 0.25  # Max 25% of bankroll (conservative)
         self.min_trade_size = 1
-        self.max_trade_size = 5
+        self.max_trade_size = 3  # Cap at 3 to prevent over-trading
         self.open_exposure = 0.0  # Track current exposure in USD
+        self.our_bankroll = 21.70  # Current actual bankroll
         
-        # Observation mode - log trades without executing
-        self.observation_mode = True  # Set to False to enable live trading
+        # LIVE TRADING MODE
+        self.observation_mode = False  # LIVE TRADING ENABLED
         self.cycle_stats = {}  # Track trades per cycle
     
     def _log_cycle_stats(self):
