@@ -160,27 +160,36 @@ class PureCopyStrategy(BaseStrategy):
             return False
     
     def _execute_exit(self, crypto: str, side: str, size: int) -> bool:
-        """Execute exit (sell) immediately at market price"""
+        """Execute exit (sell) immediately at current market price"""
         ticker = self.active_markets.get(crypto)
         if not ticker:
             logger.debug(f"  No active market for {crypto}")
             return False
         
-        # Get current bid
+        # Get current market price from /markets/{ticker}
         try:
-            orderbook = self.client.get_orderbook(ticker)
-            if not orderbook:
+            response = self.client._request("GET", f"/markets/{ticker}")
+            if response.status_code != 200:
+                logger.warning(f"  Could not get market data for {ticker}")
                 return False
             
-            book = orderbook.get('orderbook', {}).get('yes' if side == 'YES' else 'no', [])
-            if not book:
-                logger.warning(f"  No liquidity for {ticker}")
+            market = response.json().get('market', {})
+            
+            # Get yes_price or no_price (these are the current market prices)
+            if side == 'YES':
+                # We're selling YES, use yes_price
+                price_str = market.get('yes_price', '0')
+                # price is in dollars like "0.87", convert to cents
+                exit_price = int(float(price_str) * 100)
+            else:
+                price_str = market.get('no_price', '0')
+                exit_price = int(float(price_str) * 100)
+            
+            if exit_price <= 0:
+                logger.warning(f"  Invalid price for {ticker}: {exit_price}c")
                 return False
             
-            # Get best bid
-            exit_price = int(book[0][0])  # [[price, size], ...]
-            
-            logger.info(f"  💸 SELL: {ticker} {side} x{size} @ {exit_price}c")
+            logger.info(f"  💸 SELL: {ticker} {side} x{size} @ {exit_price}c (market price)")
             result = self.client.place_order(ticker, side.lower(), exit_price, size)
             
             if result.get('success') or result.get('order_id'):
@@ -264,25 +273,22 @@ class PureCopyStrategy(BaseStrategy):
                     
                     logger.info(f"🚨 distinct-baguette: {side} {crypto} ${size_usd:.2f} @ {price:.2f}")
                     
-                    # Execute
+                    # Execute (these are synchronous, don't use await)
                     if side == 'BUY':
                         # Convert price (0.0-1.0) to cents (0-100)
                         price_cents = int(price * 100)
                         position_size = self._get_position_size(size_usd)
                         
                         # Map Polymarket side to Kalshi
-                        # On Polymarket: BUY means buying YES shares (bullish)
                         kalshi_side = 'YES'
                         
-                        await self._execute_trade(crypto, kalshi_side, price_cents, position_size)
+                        self._execute_trade(crypto, kalshi_side, price_cents, position_size)
                         
                     else:  # SELL
-                        # When they sell, we need to exit our position
-                        # Assume we have 1-3 contracts to sell
                         position_size = self._get_position_size(size_usd)
-                        kalshi_side = 'YES'  # Selling YES shares
+                        kalshi_side = 'YES'
                         
-                        await self._execute_exit(crypto, kalshi_side, position_size)
+                        self._execute_exit(crypto, kalshi_side, position_size)
                 
                 # Wait before next poll
                 await asyncio.sleep(5)
@@ -294,3 +300,11 @@ class PureCopyStrategy(BaseStrategy):
     async def continuous_trade_loop(self):
         """Entry point for continuous trading"""
         await self.scan()
+    
+    async def execute(self, opportunities):
+        """Execute trades - not used in this simplified version"""
+        return 0
+    
+    def get_performance(self):
+        """Get performance metrics"""
+        return {'trades': len(self.seen_trades), 'pnl': 0}
