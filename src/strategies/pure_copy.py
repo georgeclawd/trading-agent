@@ -378,7 +378,6 @@ class PureCopyStrategy(BaseStrategy):
         
         # Try to execute immediately
         if await self._execute_trade(qt):
-            self._update_exposure(size, price)
             return
         
         # If failed, add to queue
