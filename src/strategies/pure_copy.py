@@ -246,8 +246,9 @@ class PureCopyStrategy(BaseStrategy):
             return
         
         # Use best bid
+        # Orderbook format: [[price, size], [price, size], ...]
         try:
-            exit_price = int(book_side[0].get('price', entry_price))
+            exit_price = int(book_side[0][0])  # First element of first list is price
             logger.info(f"   📊 Best bid: {exit_price}c, Entry: {entry_price}c")
         except Exception as e:
             logger.error(f"   ❌ Error getting exit price: {e}")
