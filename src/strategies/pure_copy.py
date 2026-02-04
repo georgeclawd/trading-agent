@@ -63,8 +63,8 @@ class PureCopyStrategy(BaseStrategy):
         self.max_queue_age_seconds = 600  # 10 minutes max in queue
         
         # Bankroll management - CONSERVATIVE with 20% safety margin
-        # Based on observation: $3-11 per cycle, using 25% max for safety
-        self.max_exposure_pct = 0.25  # Max 25% of bankroll (conservative)
+        # Based on observation: $3-11 per cycle, using 20% max for safety
+        self.max_exposure_pct = 0.20  # Max 20% of bankroll (very conservative)
         self.min_trade_size = 1
         self.max_trade_size = 3  # Cap at 3 to prevent over-trading
         self.open_exposure = 0.0  # Track current exposure in USD
@@ -436,9 +436,13 @@ class PureCopyStrategy(BaseStrategy):
                 current_window = current_minute // 15  # 0, 1, 2, or 3
                 
                 if last_window is not None and current_window != last_window:
-                    # Window changed - log cycle stats
+                    # Window changed - log cycle stats and reset exposure
                     if self.observation_mode and self.cycle_stats:
                         self._log_cycle_stats()
+                    # Reset exposure tracking for new cycle
+                    if not self.observation_mode:
+                        logger.info(f"🔄 New cycle starting - resetting exposure (was ${self.open_exposure:.2f})")
+                        self.open_exposure = 0.0
                 last_window = current_window
                 
                 # Refresh markets and bankroll every 10 polls
