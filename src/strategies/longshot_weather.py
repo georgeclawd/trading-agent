@@ -494,7 +494,11 @@ class LongshotWeatherStrategy(BaseStrategy):
                     logger.error(f"    [REAL] ✗ Failed to execute {ticker}: {e}")
                     continue
             
-            # Track for performance with TIERED EXIT STRATEGY
+            # Track for performance with TIERED EXIT STRATEGY (FEE-ADJUSTED)
+            # Key: Buy costs P+1 cents, Sell gives P-1 cents
+            # To profit: need sell_price - 1 > entry_price + 1 → sell_price > entry_price + 2
+            # Tier 1: 4x entry (e.g., 1c → 4c) = guaranteed profit after fees
+            # Tier 2: 6x+ entry (e.g., 1c → 6c+) = home run
             trade = {
                 'ticker': ticker,
                 'market': opp['market'],
@@ -507,13 +511,15 @@ class LongshotWeatherStrategy(BaseStrategy):
                 'status': 'open',
                 'simulated': self.dry_run,
                 'exit_strategy': {
-                    'tier1_price': market_price_cents * 2,      # 2x - sell 50%
+                    'entry_price': market_price_cents,          # Track actual entry
+                    'tier1_price': market_price_cents * 4,      # 4x - sell 50% (profit after fees)
                     'tier1_sold': False,
-                    'tier2_price': market_price_cents * 3,      # 3x - sell remaining
+                    'tier2_price': market_price_cents * 6,      # 6x - sell remaining
                     'tier2_sold': False,
-                    'stop_price': max(1, market_price_cents // 2),  # 0.5x - stop loss
-                    'time_exit_hours': 6,  # Exit if <6h to expiry and not profitable
-                    'partial_position_remaining': 1.0  # 1.0 = 100%, 0.5 = 50% after tier1
+                    'stop_price': max(1, market_price_cents - 1),  # Exit if dropping (max loss already)
+                    'time_exit_hours': 6,  # Exit if <6h to expiry and unprofitable
+                    'partial_position_remaining': 1.0,  # 1.0 = 100%, 0.5 = 50% after tier1
+                    'fee_per_contract': 1  # 1c fee on both buy and sell
                 }
             }
             self.record_trade(trade)
@@ -537,11 +543,13 @@ class LongshotWeatherStrategy(BaseStrategy):
     
     async def check_exits(self):
         """
-        TIERED EXIT STRATEGY for cheap weather bets:
-        - Sell 50% at 2x (100% gain) - locks in profit
-        - Sell remaining at 3x+ (200%+ gain) - captures home runs
-        - Stop loss at 0.5x (50% loss) - limits max loss
-        - Time exit: <6h to expiry and not profitable, exit all
+        TIERED EXIT STRATEGY for cheap weather bets (FEE-ADJUSTED):
+        - Entry at P cents costs P+1 cents (price + 1c fee)
+        - Sell at P cents gives P-1 cents (price - 1c fee)
+        - To profit: need sell_price > entry_price + 2
+        - Tier 1: Sell 50% at 4x (profit after fees)
+        - Tier 2: Sell remaining at 6x+ (home run)
+        - Stop: Exit at entry-1c if dropping (max loss)
         """
         if self.dry_run:
             return  # Don't manage exits in simulation mode
@@ -555,8 +563,9 @@ class LongshotWeatherStrategy(BaseStrategy):
             
             ticker = trade['ticker']
             exit_strat = trade.get('exit_strategy', {})
-            entry_price = int(trade.get('market_price', 0.01) * 100)
+            entry_price = exit_strat.get('entry_price', int(trade.get('market_price', 0.01) * 100))
             position_size = trade.get('size', 0)
+            fee = exit_strat.get('fee_per_contract', 1)
             
             # Get current market price
             try:
@@ -570,14 +579,14 @@ class LongshotWeatherStrategy(BaseStrategy):
                     continue
                 current_price = int(yes_bids[0].get('price', entry_price))
                 
-                tier1_price = exit_strat.get('tier1_price', entry_price * 2)
-                tier2_price = exit_strat.get('tier2_price', entry_price * 3)
-                stop_price = exit_strat.get('stop_price', max(1, entry_price // 2))
+                tier1_price = exit_strat.get('tier1_price', entry_price * 4)  # 4x
+                tier2_price = exit_strat.get('tier2_price', entry_price * 6)  # 6x
+                stop_price = exit_strat.get('stop_price', max(1, entry_price - 1))
                 tier1_sold = exit_strat.get('tier1_sold', False)
                 tier2_sold = exit_strat.get('tier2_sold', False)
                 remaining_pct = exit_strat.get('partial_position_remaining', 1.0)
                 
-                # TIER 2: Home run - sell remaining at 3x+
+                # TIER 2: Home run - sell remaining at 6x+
                 if current_price >= tier2_price and not tier2_sold and remaining_pct > 0:
                     contracts_to_sell = int(position_size * remaining_pct)
                     if contracts_to_sell > 0:
@@ -586,12 +595,13 @@ class LongshotWeatherStrategy(BaseStrategy):
                             exit_strat['tier2_sold'] = True
                             exit_strat['partial_position_remaining'] = 0
                             trade['status'] = 'closed'
-                            pnl = (current_price - entry_price) * contracts_to_sell * 0.01
-                            logger.info(f"🎯 TIER 2 EXIT: {ticker} @ {current_price}c (3x+ target)")
+                            # P&L with fees: (sell_price - fee) - (entry_price + fee)
+                            pnl = ((current_price - fee) - (entry_price + fee)) * contracts_to_sell * 0.01
+                            logger.info(f"🎯 TIER 2 EXIT: {ticker} @ {current_price}c (6x+ target)")
                             logger.info(f"   Sold {contracts_to_sell} @ {current_price}c, P&L: ${pnl:+.2f}")
                             continue
                 
-                # TIER 1: Quick profit - sell 50% at 2x
+                # TIER 1: Profit taking - sell 50% at 4x
                 if current_price >= tier1_price and not tier1_sold:
                     contracts_to_sell = position_size // 2
                     if contracts_to_sell > 0:
@@ -599,12 +609,14 @@ class LongshotWeatherStrategy(BaseStrategy):
                         if result.get('success'):
                             exit_strat['tier1_sold'] = True
                             exit_strat['partial_position_remaining'] = 0.5
-                            pnl = (current_price - entry_price) * contracts_to_sell * 0.01
-                            logger.info(f"💰 TIER 1 EXIT: {ticker} @ {current_price}c (2x target)")
+                            # P&L with fees
+                            pnl = ((current_price - fee) - (entry_price + fee)) * contracts_to_sell * 0.01
+                            logger.info(f"💰 TIER 1 EXIT: {ticker} @ {current_price}c (4x target - profit after fees)")
+                            logger.info(f"   Entry: {entry_price}c + {fee}c fee | Sell: {current_price}c - {fee}c fee")
                             logger.info(f"   Sold {contracts_to_sell} (50%), P&L: ${pnl:+.2f}")
-                            logger.info(f"   Holding {contracts_to_sell} for tier 2 (3x target)")
+                            logger.info(f"   Holding {contracts_to_sell} for tier 2 (6x target)")
                 
-                # STOP LOSS: Exit all at 0.5x
+                # STOP LOSS: Exit all at entry-1c or lower
                 if current_price <= stop_price:
                     contracts_to_sell = int(position_size * remaining_pct)
                     if contracts_to_sell > 0:
@@ -614,8 +626,10 @@ class LongshotWeatherStrategy(BaseStrategy):
                             exit_strat['tier2_sold'] = True
                             exit_strat['partial_position_remaining'] = 0
                             trade['status'] = 'closed'
-                            pnl = (current_price - entry_price) * contracts_to_sell * 0.01
-                            logger.info(f"🛑 STOP LOSS: {ticker} @ {current_price}c (0.5x)")
+                            # P&L with fees (will be negative)
+                            pnl = ((current_price - fee) - (entry_price + fee)) * contracts_to_sell * 0.01
+                            logger.info(f"🛑 STOP LOSS: {ticker} @ {current_price}c")
+                            logger.info(f"   Entry: {entry_price}c + {fee}c fee | Sell: {current_price}c - {fee}c fee")
                             logger.info(f"   Sold all {contracts_to_sell}, P&L: ${pnl:+.2f}")
                 
                 # TIME EXIT: <6h to expiry and not profitable
