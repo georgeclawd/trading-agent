@@ -89,6 +89,9 @@ class PureCopyStrategy(BaseStrategy):
             }
             for name in self.competitors.keys()
         }
+        
+        # OPEN POSITIONS TRACKING - for exit logic
+        self.open_positions = {}  # Key: (trader, crypto, side) -> {size, entry_price, ticker}
     
     def _log_cycle_stats(self):
         """Log statistics for the current cycle"""
@@ -170,18 +173,93 @@ class PureCopyStrategy(BaseStrategy):
             reverse=True
         )
         
+        total_pnl = 0
         for trader, perf in sorted_traders:
             if perf['trades_count'] == 0:
                 continue
             
+            total_trades = perf['wins'] + perf['losses']
+            win_rate = (perf['wins'] / total_trades * 100) if total_trades > 0 else 0
+            total_pnl += perf['realized_pnl']
+            
+            pnl_emoji = "🟢" if perf['realized_pnl'] > 0 else "🔴" if perf['realized_pnl'] < 0 else "⚪"
+            
             logger.info(f"\n👤 {trader}:")
-            logger.info(f"   Trades: {perf['trades_count']}")
+            logger.info(f"   Trades: {perf['trades_count']} | Exits: {total_trades}")
+            logger.info(f"   Win Rate: {win_rate:.0f}% ({perf['wins']}W/{perf['losses']}L)")
             logger.info(f"   Total Invested: ${perf['total_cost']:.2f}")
-            logger.info(f"   Contracts: {perf['total_contracts']}")
-            logger.info(f"   Avg Price: {perf['avg_price']:.1f}c")
-            logger.info(f"   Realized P&L: ${perf['realized_pnl']:.2f}")
+            logger.info(f"   {pnl_emoji} Realized P&L: ${perf['realized_pnl']:+.2f}")
         
+        logger.info(f"\n💰 COMBINED P&L: ${total_pnl:+.2f}")
         logger.info("=" * 70)
+    
+    async def _exit_position(self, competitor: str, crypto: str, side: str):
+        """Sell our position when competitor exits"""
+        position_key = (competitor, crypto, side)
+        
+        if position_key not in self.open_positions:
+            return
+        
+        pos = self.open_positions[position_key]
+        ticker = pos['ticker']
+        size = pos['size']
+        entry_price = pos['entry_price']
+        
+        if not ticker:
+            logger.warning(f"   No ticker for {crypto}, can't exit")
+            return
+        
+        # Get current market price
+        orderbook = self.client.get_orderbook(ticker)
+        if not orderbook:
+            logger.warning(f"   Can't get orderbook for {ticker}")
+            return
+        
+        # Determine sell price (bid side)
+        if side == 'YES':
+            book_side = orderbook.get('orderbook', {}).get('yes', [])
+        else:
+            book_side = orderbook.get('orderbook', {}).get('no', [])
+        
+        if not book_side:
+            logger.warning(f"   No liquidity for {ticker} {side}")
+            return
+        
+        # Use best bid
+        exit_price = int(book_side[0].get('price', entry_price))
+        
+        # Place sell order
+        sell_side = side.lower()
+        result = self.client.place_order(ticker, sell_side, exit_price, size)
+        
+        if result.get('success'):
+            # Calculate P&L
+            entry_cost = size * entry_price * 0.01
+            exit_value = size * exit_price * 0.01
+            pnl = exit_value - entry_cost
+            pnl_pct = (exit_price - entry_price) / entry_price * 100 if entry_price > 0 else 0
+            
+            # Update trader performance
+            if competitor in self.trader_performance:
+                self.trader_performance[competitor]['realized_pnl'] += pnl
+                if pnl > 0:
+                    self.trader_performance[competitor]['wins'] += 1
+                else:
+                    self.trader_performance[competitor]['losses'] += 1
+            
+            # Remove from open positions
+            del self.open_positions[position_key]
+            
+            # Reduce exposure tracking
+            self.open_exposure -= size * entry_price * 0.01
+            if self.open_exposure < 0:
+                self.open_exposure = 0
+            
+            emoji = "🟢" if pnl > 0 else "🔴"
+            logger.info(f"   {emoji} EXITED: {competitor} {crypto} {side} x{size}")
+            logger.info(f"      Entry: {entry_price}c | Exit: {exit_price}c | P&L: ${pnl:.2f} ({pnl_pct:+.1f}%)")
+        else:
+            logger.warning(f"   ❌ Failed to exit: {result.get('error', 'Unknown')}")
     
     def _update_bankroll(self):
         """Update our bankroll from Kalshi"""
@@ -427,29 +505,60 @@ class PureCopyStrategy(BaseStrategy):
             return
         
         # LIVE TRADING MODE
-        # Calculate position size based on bankroll ratio
-        size = self._get_position_size(competitor, trade_size_usd, price)
-        if size == 0:
-            return  # Max exposure reached
+        position_key = (competitor, crypto, kalshi_side)
+        opposite_key = (competitor, crypto, 'NO' if kalshi_side == 'YES' else 'YES')
         
-        # Create queued trade
-        qt = QueuedTrade(
-            competitor=competitor,
-            trade=trade,
-            crypto=crypto,
-            kalshi_side=kalshi_side,
-            price=price,
-            size=size,
-            queued_at=datetime.now(timezone.utc)
-        )
+        # CASE 1: Competitor is BUYING - we BUY too (if no position yet)
+        if side == 'BUY':
+            # Check if we already have a position in this direction
+            if position_key in self.open_positions:
+                logger.info(f"   ⏭️  Already long {crypto} {kalshi_side}, skipping")
+                return
+            
+            # Check if we have opposite position - should we flip?
+            if opposite_key in self.open_positions:
+                logger.info(f"   🔄 Competitor flipped! Selling our {crypto} {'NO' if kalshi_side == 'YES' else 'YES'} position")
+                await self._exit_position(competitor, crypto, 'NO' if kalshi_side == 'YES' else 'YES')
+                # Don't immediately buy - wait for next signal
+                return
+            
+            # New position - calculate size and buy
+            size = self._get_position_size(competitor, trade_size_usd, price)
+            if size == 0:
+                return  # Max exposure reached
+            
+            qt = QueuedTrade(
+                competitor=competitor,
+                trade=trade,
+                crypto=crypto,
+                kalshi_side=kalshi_side,
+                price=price,
+                size=size,
+                queued_at=datetime.now(timezone.utc)
+            )
+            
+            if await self._execute_trade(qt):
+                # Track open position
+                self.open_positions[position_key] = {
+                    'size': size,
+                    'entry_price': price,
+                    'ticker': self.kalshi_markets.get(crypto),
+                    'timestamp': datetime.now(timezone.utc)
+                }
+                logger.info(f"   📈 Opened position: {competitor} {crypto} {kalshi_side} x{size} @ {price}c")
+                return
+            
+            self.trade_queue.append(qt)
+            logger.info(f"   📥 Queued: {qt}")
         
-        # Try to execute immediately
-        if await self._execute_trade(qt):
-            return
-        
-        # If failed, add to queue
-        self.trade_queue.append(qt)
-        logger.info(f"   📥 Queued trade for retry: {qt} (queue size: {len(self.trade_queue)})")
+        # CASE 2: Competitor is SELLING - we SELL our position
+        else:  # side == 'SELL'
+            # Check if we have a position to sell
+            if position_key in self.open_positions:
+                logger.info(f"   💸 Competitor selling {crypto} {kalshi_side} - exiting our position!")
+                await self._exit_position(competitor, crypto, kalshi_side)
+            else:
+                logger.debug(f"   No position to sell for {competitor} {crypto} {kalshi_side}")
     
     async def _poll_once(self):
         """Poll competitors once and process queue"""
