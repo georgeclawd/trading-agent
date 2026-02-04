@@ -40,16 +40,15 @@ class PureCopyStrategy(BaseStrategy):
         super().__init__(config, client, position_manager)
         self.name = "PureCopy"
         
+        # FOCUS ONLY ON distinct-baguette - proven profitable with exits
         self.competitors = {
             'distinct-baguette': '0xe00740bce98a594e26861838885ab310ec3b548c',
-            '0x8dxd': '0x63ce342161250d705dc0b16df89036c8e5f9ba9a',
-            'k9Q2mX4L8A7ZP3R': '0xd0d6053c3c37e727402d84c14069780d360993aa',
+            # REMOVED: '0x8dxd' - accumulator strategy (needs big bankroll)
+            # REMOVED: 'k9Q2mX4L8A7ZP3R' - accumulator strategy (needs big bankroll)
         }
         
         self.competitor_bankrolls = {
             'distinct-baguette': 6800,
-            '0x8dxd': 47000,
-            'k9Q2mX4L8A7ZP3R': 51000,
         }
         
         self.seen_trades = set()
@@ -269,6 +268,13 @@ class PureCopyStrategy(BaseStrategy):
                 self.our_bankroll = balance_data['balance'] / 100.0
         except Exception as e:
             logger.debug(f"Could not update bankroll: {e}")
+    
+    def _recalculate_exposure(self):
+        """Recalculate exposure from actual open positions - fixes tracking drift"""
+        total = 0.0
+        for key, pos in self.open_positions.items():
+            total += pos['size'] * pos['entry_price'] * 0.01
+        self.open_exposure = total
     
     def _get_position_size(self, competitor: str, trade_size_usd: float, price: float) -> int:
         """Calculate position size based on competitor's trade relative to their bankroll"""
@@ -557,12 +563,19 @@ class PureCopyStrategy(BaseStrategy):
         
         # CASE 2: Competitor is SELLING - we SELL our position
         else:  # side == 'SELL'
-            # Check if we have a position to sell
-            if position_key in self.open_positions:
-                logger.info(f"   💸 Competitor selling {crypto} {kalshi_side} - exiting our position!")
-                await self._exit_position(competitor, crypto, kalshi_side)
+            # When competitor sells, we don't know which side they sold (YES or NO)
+            # Check if we have ANY position in this crypto for this competitor
+            yes_key = (competitor, crypto, 'YES')
+            no_key = (competitor, crypto, 'NO')
+            
+            if yes_key in self.open_positions:
+                logger.info(f"   💸 Competitor selling - exiting our {crypto} YES position!")
+                await self._exit_position(competitor, crypto, 'YES')
+            elif no_key in self.open_positions:
+                logger.info(f"   💸 Competitor selling - exiting our {crypto} NO position!")
+                await self._exit_position(competitor, crypto, 'NO')
             else:
-                logger.debug(f"   No position to sell for {competitor} {crypto} {kalshi_side}")
+                logger.info(f"   ⚠️ Competitor sold {crypto} but we have no position to exit")
     
     async def _poll_once(self):
         """Poll competitors once and process queue"""
@@ -630,7 +643,10 @@ class PureCopyStrategy(BaseStrategy):
                     self._refresh_kalshi_markets()
                     if not self.observation_mode:
                         self._update_bankroll()
+                        # Recalculate exposure from actual open positions (fixes drift)
+                        self._recalculate_exposure()
                         logger.info(f"💰 Bankroll: ${self.our_bankroll:.2f}, Exposure: ${self.open_exposure:.2f} ({self.open_exposure/self.our_bankroll*100:.1f}%)")
+                        logger.info(f"   Open positions: {len(self.open_positions)}")
                     else:
                         logger.info(f"👁️  OBSERVATION MODE - Watching competitors (bankroll: $21.70)")
                 
