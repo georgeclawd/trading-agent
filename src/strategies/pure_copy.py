@@ -182,13 +182,6 @@ class PureCopyStrategy(BaseStrategy):
             logger.info(f"   Realized P&L: ${perf['realized_pnl']:.2f}")
         
         logger.info("=" * 70)
-        else:
-            logger.info(f"   ✅ Bankroll sufficient for next cycle")
-        
-        logger.info("=" * 70)
-        
-        # Reset for next cycle
-        self.cycle_stats = {}
     
     def _update_bankroll(self):
         """Update our bankroll from Kalshi"""
