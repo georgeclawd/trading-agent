@@ -495,10 +495,8 @@ class LongshotWeatherStrategy(BaseStrategy):
                     continue
             
             # Track for performance with TIERED EXIT STRATEGY (FEE-ADJUSTED)
-            # Key: Buy costs P+1 cents, Sell gives P-1 cents
-            # To profit: need sell_price - 1 > entry_price + 1 → sell_price > entry_price + 2
-            # Tier 1: 4x entry (e.g., 1c → 4c) = guaranteed profit after fees
-            # Tier 2: 6x+ entry (e.g., 1c → 6c+) = home run
+            # Fee is fetched dynamically from API fills after each trade
+            # Typical: ~$0.001/contract for takers, $0 for makers
             trade = {
                 'ticker': ticker,
                 'market': opp['market'],
@@ -519,7 +517,8 @@ class LongshotWeatherStrategy(BaseStrategy):
                     'stop_price': max(1, market_price_cents - 1),  # Exit if dropping (max loss already)
                     'time_exit_hours': 6,  # Exit if <6h to expiry and unprofitable
                     'partial_position_remaining': 1.0,  # 1.0 = 100%, 0.5 = 50% after tier1
-                    'fee_per_contract': 1  # 1c fee on both buy and sell
+                    'buy_fee': None,  # Will be populated from API after trade
+                    'sell_fee': None  # Will be estimated based on latest fills
                 }
             }
             self.record_trade(trade)
@@ -539,14 +538,32 @@ class LongshotWeatherStrategy(BaseStrategy):
             'total_pnl': total_pnl,
             'win_rate': win_rate,
             'trades': len(self.trades)
-        }
+    }
+    
+    def _get_actual_fee_from_api(self, ticker: str, count: int) -> float:
+        """Fetch actual fee paid from API fills for a given ticker and count"""
+        try:
+            response = self.client._request("GET", "/portfolio/fills")
+            if response.status_code == 200:
+                fills = response.json().get('fills', [])
+                for fill in fills:
+                    if fill.get('ticker') == ticker and fill.get('count') == count:
+                        return float(fill.get('fee_cost', 0))
+        except Exception as e:
+            logger.debug(f"Could not fetch fee for {ticker}: {e}")
+        return 0.0
+    
+    def _estimate_sell_fee(self, count: int) -> float:
+        """Estimate sell fee based on recent API data
+        Pattern: ~$0.001 per contract, rounded to nearest cent, min $0.01 for takers
+        """
+        estimated = count * 0.001  # $0.001 per contract
+        return round(estimated, 2)  # Round to cents
     
     async def check_exits(self):
         """
-        TIERED EXIT STRATEGY for cheap weather bets (FEE-ADJUSTED):
-        - Entry at P cents costs P+1 cents (price + 1c fee)
-        - Sell at P cents gives P-1 cents (price - 1c fee)
-        - To profit: need sell_price > entry_price + 2
+        TIERED EXIT STRATEGY for cheap weather bets (DYNAMIC FEES):
+        - Fees fetched from API (~$0.001/contract for takers)
         - Tier 1: Sell 50% at 4x (profit after fees)
         - Tier 2: Sell remaining at 6x+ (home run)
         - Stop: Exit at entry-1c if dropping (max loss)
@@ -565,7 +582,16 @@ class LongshotWeatherStrategy(BaseStrategy):
             exit_strat = trade.get('exit_strategy', {})
             entry_price = exit_strat.get('entry_price', int(trade.get('market_price', 0.01) * 100))
             position_size = trade.get('size', 0)
-            fee = exit_strat.get('fee_per_contract', 1)
+            
+            # Fetch actual buy fee from API if not already stored
+            if exit_strat.get('buy_fee') is None:
+                exit_strat['buy_fee'] = self._get_actual_fee_from_api(ticker, position_size)
+            buy_fee_cents = int(exit_strat.get('buy_fee', 0) * 100)  # Convert to cents
+            
+            # Estimate sell fee
+            sell_fee_dollars = self._estimate_sell_fee(position_size)
+            sell_fee_cents = int(sell_fee_dollars * 100)
+            exit_strat['sell_fee'] = sell_fee_dollars
             
             # Get current market price
             try:
@@ -595,8 +621,10 @@ class LongshotWeatherStrategy(BaseStrategy):
                             exit_strat['tier2_sold'] = True
                             exit_strat['partial_position_remaining'] = 0
                             trade['status'] = 'closed'
-                            # P&L with fees: (sell_price - fee) - (entry_price + fee)
-                            pnl = ((current_price - fee) - (entry_price + fee)) * contracts_to_sell * 0.01
+                            # P&L with dynamic fees
+                            total_buy_cost = (entry_price * position_size) + buy_fee_cents
+                            sell_revenue = (current_price * contracts_to_sell) - sell_fee_cents
+                            pnl = (sell_revenue - (total_buy_cost * remaining_pct)) * 0.01
                             logger.info(f"🎯 TIER 2 EXIT: {ticker} @ {current_price}c (6x+ target)")
                             logger.info(f"   Sold {contracts_to_sell} @ {current_price}c, P&L: ${pnl:+.2f}")
                             continue
@@ -609,10 +637,13 @@ class LongshotWeatherStrategy(BaseStrategy):
                         if result.get('success'):
                             exit_strat['tier1_sold'] = True
                             exit_strat['partial_position_remaining'] = 0.5
-                            # P&L with fees
-                            pnl = ((current_price - fee) - (entry_price + fee)) * contracts_to_sell * 0.01
+                            # P&L with dynamic fees
+                            total_buy_cost = (entry_price * position_size) + buy_fee_cents
+                            sell_revenue = (current_price * contracts_to_sell) - sell_fee_cents
+                            pnl = (sell_revenue - (total_buy_cost * 0.5)) * 0.01
                             logger.info(f"💰 TIER 1 EXIT: {ticker} @ {current_price}c (4x target - profit after fees)")
-                            logger.info(f"   Entry: {entry_price}c + {fee}c fee | Sell: {current_price}c - {fee}c fee")
+                            logger.info(f"   Buy: {position_size}@{entry_price}c + ${buy_fee_cents/100:.2f} fee")
+                            logger.info(f"   Sell: {contracts_to_sell}@{current_price}c - ${sell_fee_cents/100:.2f} fee")
                             logger.info(f"   Sold {contracts_to_sell} (50%), P&L: ${pnl:+.2f}")
                             logger.info(f"   Holding {contracts_to_sell} for tier 2 (6x target)")
                 
@@ -626,10 +657,13 @@ class LongshotWeatherStrategy(BaseStrategy):
                             exit_strat['tier2_sold'] = True
                             exit_strat['partial_position_remaining'] = 0
                             trade['status'] = 'closed'
-                            # P&L with fees (will be negative)
-                            pnl = ((current_price - fee) - (entry_price + fee)) * contracts_to_sell * 0.01
+                            # P&L with dynamic fees (will be negative)
+                            total_buy_cost = (entry_price * position_size) + buy_fee_cents
+                            sell_revenue = (current_price * contracts_to_sell) - sell_fee_cents
+                            pnl = (sell_revenue - total_buy_cost) * 0.01
                             logger.info(f"🛑 STOP LOSS: {ticker} @ {current_price}c")
-                            logger.info(f"   Entry: {entry_price}c + {fee}c fee | Sell: {current_price}c - {fee}c fee")
+                            logger.info(f"   Buy: {position_size}@{entry_price}c + ${buy_fee_cents/100:.2f} fee")
+                            logger.info(f"   Sell: {contracts_to_sell}@{current_price}c - ${sell_fee_cents/100:.2f} fee")
                             logger.info(f"   Sold all {contracts_to_sell}, P&L: ${pnl:+.2f}")
                 
                 # TIME EXIT: <6h to expiry and not profitable
