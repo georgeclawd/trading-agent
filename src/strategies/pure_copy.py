@@ -161,9 +161,10 @@ class PureCopyStrategy(BaseStrategy):
     
     def _execute_exit(self, crypto: str, side: str, size: int) -> bool:
         """Execute exit (sell) immediately at current market price"""
+        logger.info(f"  _execute_exit called: {crypto} {side} x{size}")
         ticker = self.active_markets.get(crypto)
         if not ticker:
-            logger.debug(f"  No active market for {crypto}")
+            logger.warning(f"  No active market for {crypto}")
             return False
         
         # Get current market price from /markets/{ticker}
@@ -189,7 +190,7 @@ class PureCopyStrategy(BaseStrategy):
                 logger.warning(f"  Invalid price for {ticker}: {exit_price}c")
                 return False
             
-            logger.info(f"  💸 SELL: {ticker} {side} x{size} @ {exit_price}c (market price)")
+            logger.info(f"  💸 SELL: {ticker} {side} x{size} @ {exit_price}c (market price: yes={market.get('yes_price')}, no={market.get('no_price')})")
             result = self.client.place_order(ticker, side.lower(), exit_price, size)
             
             if result.get('success') or result.get('order_id'):
@@ -288,7 +289,10 @@ class PureCopyStrategy(BaseStrategy):
                         position_size = self._get_position_size(size_usd)
                         kalshi_side = 'YES'
                         
-                        self._execute_exit(crypto, kalshi_side, position_size)
+                        logger.info(f"  🔄 Executing SELL for {crypto}...")
+                        result = self._execute_exit(crypto, kalshi_side, position_size)
+                        if not result:
+                            logger.warning(f"  ⚠️ SELL failed for {crypto}")
                 
                 # Wait before next poll
                 await asyncio.sleep(5)
