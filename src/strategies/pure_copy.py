@@ -1,9 +1,8 @@
 """
-Pure Copy Trading Strategy - SIMPLIFIED VERSION
+Pure Copy Trading Strategy - SIMULATION MODE
 
-Only trades CURRENT WINDOW markets.
-When window expires, moves to next window.
-No position tracking - just immediate trade copying.
+4-hour simulation with $1000 starting balance.
+Logs all trades that WOULD have been made and calculates P&L.
 """
 
 import asyncio
@@ -17,13 +16,12 @@ logger = logging.getLogger('PureCopyTrading')
 
 class PureCopyStrategy(BaseStrategy):
     """
-    Copy distinct-baguette trades on CURRENT WINDOW only.
-    When window expires, move to next window.
+    SIMULATION: Copy distinct-baguette trades, track hypothetical P&L
     """
     
     def __init__(self, config: Dict, client, position_manager=None):
         super().__init__(config, client, position_manager)
-        self.name = "PureCopy"
+        self.name = "PureCopy-SIMULATION"
         
         # Only copy distinct-baguette
         self.competitor_address = '0xe00740bce98a594e26861838885ab310ec3b548c'
@@ -32,19 +30,28 @@ class PureCopyStrategy(BaseStrategy):
         self.seen_trades = set()
         self._running = False
         
+        # SIMULATION PARAMETERS
+        self.simulation_start_balance = 1000.00  # Starting with $1000
+        self.simulated_balance = 1000.00
+        self.simulated_exposure = 0.0
+        
         # Current window tracking
         self.current_window_end = None
         self.active_markets = {}  # crypto -> kalshi_ticker for current window
         
-        # Simple position sizing
-        self.our_bankroll = 21.70  # Will update dynamically
-        self.max_position_pct = 0.10  # Max 10% per trade
+        # Track simulated positions
+        self.simulated_positions = {}  # crypto -> {size, side, entry_price, ticker}
         
-        # Track open positions for exit-at-5-min logic
-        self.open_positions = {}  # crypto -> {size, side, entry_price}
+        # Trade log for analysis
+        self.simulated_trades = []  # List of all simulated trades
         
-        logger.info("🚀 PureCopy initialized - CURRENT WINDOW ONLY mode")
-        logger.info("   Strategy: Exit all positions 5 min before window close")
+        # Track baguette's trades for comparison
+        self.baguette_trades = []
+        
+        logger.info("🎮 SIMULATION MODE ACTIVE")
+        logger.info(f"   Starting balance: ${self.simulation_start_balance:.2f}")
+        logger.info("   No real trades will be executed")
+        logger.info("=" * 70)
     
     def _get_current_window_times(self):
         """Get start and end of current 15-min window"""
@@ -58,8 +65,7 @@ class PureCopyStrategy(BaseStrategy):
         return window_start, window_end
     
     def _get_window_timestamp(self, dt: datetime):
-        """Convert datetime to window timestamp string (for market matching)"""
-        # Format: HHMM (e.g., 1045 for 10:45)
+        """Convert datetime to window timestamp string"""
         return dt.strftime('%H%M')
     
     def _find_current_window_markets(self):
@@ -74,7 +80,6 @@ class PureCopyStrategy(BaseStrategy):
         
         for crypto, series in [('BTC', 'KXBTC15M'), ('ETH', 'KXETH15M'), ('SOL', 'KXSOL15M')]:
             try:
-                # Look for market matching current window
                 markets = self.client.get_markets(series_ticker=series, limit=20)
                 
                 for m in markets:
@@ -85,19 +90,15 @@ class PureCopyStrategy(BaseStrategy):
                     if status != 'active':
                         continue
                     
-                    # Check if this market closes at our window end
                     if close_time:
                         close_dt = datetime.fromisoformat(close_time.replace('Z', '+00:00'))
                         if close_dt == window_end or close_dt.strftime('%H%M') == window_ts:
                             self.active_markets[crypto] = ticker
-                            logger.info(f"  ✅ {crypto}: {ticker} (closes {close_time})")
+                            logger.info(f"  ✅ {crypto}: {ticker}")
                             break
                             
             except Exception as e:
                 logger.error(f"  ❌ Error finding {crypto} market: {e}")
-        
-        if not self.active_markets:
-            logger.warning("  ⚠️ No active markets found for current window!")
         
         return len(self.active_markets) > 0
     
@@ -106,23 +107,58 @@ class PureCopyStrategy(BaseStrategy):
         now = datetime.now(timezone.utc)
         
         if self.current_window_end and now >= self.current_window_end:
-            logger.info(f"🔄 Window expired at {self.current_window_end.strftime('%H:%M UTC')}")
+            logger.info(f"🔄 Window expired - settling positions")
+            self._settle_window_positions()
             logger.info("   Finding markets for NEW window...")
-            self.seen_trades.clear()  # Clear seen trades for new window
+            self.seen_trades.clear()
             return self._find_current_window_markets()
         
         return False
     
+    def _settle_window_positions(self):
+        """Settle all positions at window end (0 or 100 based on market outcome)"""
+        logger.info("📊 SETTLING WINDOW POSITIONS:")
+        
+        for crypto, pos in list(self.simulated_positions.items()):
+            size = pos['size']
+            side = pos['side']
+            entry_price = pos['entry_price']
+            
+            # SIMULATION: Assume 50/50 outcome for now
+            # In reality, we'd check actual market settlement
+            settle_price = 50  # 50 cents = breakeven expectation
+            
+            if side == 'YES':
+                pnl = (settle_price - entry_price) * size * 0.01
+            else:
+                pnl = (entry_price - settle_price) * size * 0.01
+            
+            self.simulated_balance += pnl
+            
+            logger.info(f"   {crypto}: {side} x{size} @ {entry_price}c -> settle @ {settle_price}c = ${pnl:+.2f}")
+            
+            self.simulated_trades.append({
+                'type': 'SETTLE',
+                'crypto': crypto,
+                'side': side,
+                'size': size,
+                'entry_price': entry_price,
+                'exit_price': settle_price,
+                'pnl': pnl,
+                'time': datetime.now(timezone.utc).isoformat()
+            })
+        
+        self.simulated_positions.clear()
+        logger.info(f"   New balance: ${self.simulated_balance:.2f}")
+    
     def _get_position_size(self, trade_size_usd: float) -> int:
-        """Simple position sizing based on bankroll ratio"""
-        # What % of their bankroll did they trade?
+        """Calculate position size based on competitor's trade relative to their bankroll"""
         their_pct = trade_size_usd / self.competitor_bankroll
+        our_trade_usd = self.simulated_balance * their_pct
         
-        # Apply same % to our bankroll (max 10%)
-        our_trade_usd = min(self.our_bankroll * their_pct, 
-                           self.our_bankroll * self.max_position_pct)
+        # Max 10% per trade
+        our_trade_usd = min(our_trade_usd, self.simulated_balance * 0.10)
         
-        # Return 1-3 contracts
         if our_trade_usd < 0.50:
             return 1
         elif our_trade_usd < 1.50:
@@ -131,7 +167,7 @@ class PureCopyStrategy(BaseStrategy):
             return 3
     
     def _log_market_prices(self):
-        """Log current market prices for all active markets (for proof)"""
+        """Log current market prices for all active markets"""
         logger.info("📊 MARKET PRICE CHECK:")
         for crypto, ticker in self.active_markets.items():
             try:
@@ -147,161 +183,132 @@ class PureCopyStrategy(BaseStrategy):
             except Exception as e:
                 logger.info(f"   {crypto}: Error {e}")
     
-    async def _exit_all_positions(self):
-        """Exit all open positions at current market price"""
-        logger.info(f"   Exiting {len(self.open_positions)} positions...")
-        for crypto, pos in list(self.open_positions.items()):
-            size = pos['size']
-            side = pos['side']
-            logger.info(f"   Selling {crypto} {side} x{size}")
-            success = self._execute_exit(crypto, side, size)
-            if success:
-                del self.open_positions[crypto]
-                logger.info(f"   ✅ Exited {crypto}")
-            else:
-                logger.warning(f"   ❌ Failed to exit {crypto}")
-    
-    def _execute_trade(self, crypto: str, side: str, price_cents: int, size: int) -> bool:
-        """Execute a single trade immediately"""
+    def _simulate_buy(self, crypto: str, price_cents: int, size: int, baguette_price: float) -> bool:
+        """Simulate a buy - track but don't execute"""
         ticker = self.active_markets.get(crypto)
         if not ticker:
-            logger.debug(f"  No active market for {crypto}")
             return False
         
-        # Verify market still active
-        try:
-            response = self.client._request("GET", f"/markets/{ticker}")
-            if response.status_code == 200:
-                status = response.json().get('market', {}).get('status', '')
-                if status != 'active':
-                    logger.warning(f"  Market {ticker} is {status}, skipping")
-                    return False
-        except Exception as e:
-            logger.debug(f"  Could not verify market status: {e}")
+        cost = size * price_cents * 0.01
+        
+        if cost > self.simulated_balance:
+            logger.warning(f"  ❌ INSUFFICIENT FUNDS: Need ${cost:.2f}, have ${self.simulated_balance:.2f}")
             return False
         
-        # Execute
-        logger.info(f"  💰 BUY: {ticker} {side} x{size} @ {price_cents}c")
-        try:
-            result = self.client.place_order(ticker, side.lower(), price_cents, size)
-            if result.get('success') or result.get('order_id'):
-                logger.info(f"  ✅ Executed! Order: {result.get('order_id', 'N/A')[:16]}...")
-                # Track position for exit logic
-                if crypto in self.open_positions:
-                    # Add to existing position
-                    old = self.open_positions[crypto]
-                    old['size'] += size
-                    old['entry_price'] = (old['entry_price'] + price_cents) / 2  # Avg
-                else:
-                    self.open_positions[crypto] = {
-                        'size': size,
-                        'side': side,
-                        'entry_price': price_cents,
-                        'ticker': ticker
-                    }
-                return True
-            else:
-                logger.warning(f"  ❌ Failed: {result}")
-                return False
-        except Exception as e:
-            logger.error(f"  ❌ Error: {e}")
-            return False
+        self.simulated_balance -= cost
+        
+        # Track position
+        if crypto in self.simulated_positions:
+            old = self.simulated_positions[crypto]
+            old['size'] += size
+            old['entry_price'] = (old['entry_price'] + price_cents) / 2
+        else:
+            self.simulated_positions[crypto] = {
+                'size': size,
+                'side': 'YES',
+                'entry_price': price_cents,
+                'ticker': ticker
+            }
+        
+        logger.info(f"  💰 SIM BUY: {crypto} YES x{size} @ {price_cents}c = ${cost:.2f}")
+        logger.info(f"     Simulated balance: ${self.simulated_balance:.2f}")
+        
+        self.simulated_trades.append({
+            'type': 'BUY',
+            'crypto': crypto,
+            'side': 'YES',
+            'size': size,
+            'price': price_cents,
+            'cost': cost,
+            'time': datetime.now(timezone.utc).isoformat()
+        })
+        
+        return True
     
-    def _execute_exit(self, crypto: str, side: str, size: int) -> bool:
-        """Execute exit (sell) immediately at current market price"""
-        logger.info(f"  _execute_exit called: {crypto} {side} x{size}")
-        ticker = self.active_markets.get(crypto)
-        if not ticker:
-            logger.warning(f"  No active market for {crypto}")
+    def _simulate_sell(self, crypto: str, size: int, baguette_price: float) -> bool:
+        """Simulate a sell - track but don't execute"""
+        if crypto not in self.simulated_positions:
+            logger.warning(f"  ⚠️ No position to sell for {crypto}")
             return False
         
-        # Get current market price from /markets/{ticker}
+        pos = self.simulated_positions[crypto]
+        ticker = pos['ticker']
+        
+        # Get current market price
         try:
-            response = self.client._request("GET", f"/markets/{ticker}")
-            if response.status_code != 200:
-                logger.warning(f"  Could not get market data for {ticker}")
-                return False
-            
-            market = response.json().get('market', {})
-            
-            # Get yes_bid or no_bid (for selling)
-            # API returns these as cents directly
-            if side == 'YES':
-                # We're selling YES, use yes_bid (what buyers will pay)
-                exit_price = market.get('yes_bid', 0)
+            r = self.client._request("GET", f"/markets/{ticker}")
+            if r.status_code == 200:
+                m = r.json().get('market', {})
+                exit_price = m.get('yes_bid', 0)  # What we can sell at
             else:
-                exit_price = market.get('no_bid', 0)
-            
-            if exit_price <= 0:
-                logger.warning(f"  Invalid price for {ticker}: {exit_price}c")
-                return False
-            
-            logger.info(f"  💸 SELL: {ticker} {side} x{size} @ {exit_price}c (market price: yes={market.get('yes_price')}, no={market.get('no_price')})")
-            result = self.client.place_order(ticker, side.lower(), exit_price, size)
-            
-            if result.get('success') or result.get('order_id'):
-                logger.info(f"  ✅ Exited! Order: {result.get('order_id', 'N/A')[:16]}...")
-                # Remove from tracking
-                if crypto in self.open_positions:
-                    del self.open_positions[crypto]
-                return True
-            else:
-                logger.warning(f"  ❌ Exit failed: {result}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"  ❌ Error exiting: {e}")
-            return False
+                exit_price = 50  # Fallback
+        except:
+            exit_price = 50
+        
+        entry_price = pos['entry_price']
+        pnl = (exit_price - entry_price) * size * 0.01
+        revenue = size * exit_price * 0.01
+        
+        self.simulated_balance += revenue
+        pos['size'] -= size
+        
+        if pos['size'] <= 0:
+            del self.simulated_positions[crypto]
+        
+        logger.info(f"  💸 SIM SELL: {crypto} YES x{size} @ {exit_price}c = ${revenue:.2f} (PnL: ${pnl:+.2f})")
+        logger.info(f"     Simulated balance: ${self.simulated_balance:.2f}")
+        
+        self.simulated_trades.append({
+            'type': 'SELL',
+            'crypto': crypto,
+            'side': 'YES',
+            'size': size,
+            'price': exit_price,
+            'revenue': revenue,
+            'pnl': pnl,
+            'time': datetime.now(timezone.utc).isoformat()
+        })
+        
+        return True
     
     async def scan(self):
-        """Main loop - continuously poll and copy trades for current window only"""
+        """Main loop - poll and simulate trades"""
         from competitor_tracker import PolymarketTracker
         
         self._running = True
-        logger.info("🚀 PureCopy started - CURRENT WINDOW ONLY MODE")
+        logger.info("🎮 SIMULATION STARTED")
+        logger.info(f"   Start: ${self.simulation_start_balance:.2f}")
+        logger.info("   Duration: 4 hours")
+        logger.info("=" * 70)
         
         # Find initial markets
         self._find_current_window_markets()
         
         tracker = PolymarketTracker()
+        start_time = datetime.now(timezone.utc)
         
         while self._running:
             try:
+                # Check for 4-hour limit
+                elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+                if elapsed > 14400:  # 4 hours
+                    logger.info("=" * 70)
+                    logger.info("⏰ 4-HOUR SIMULATION COMPLETE")
+                    await self._print_final_report()
+                    break
+                
                 # Check for window change
                 self._check_window_change()
                 
-                # Update bankroll
-                try:
-                    balance_data = self.client.get_balance()
-                    if balance_data:
-                        self.our_bankroll = balance_data['balance'] / 100.0
-                except:
-                    pass
-                
-                # Log status periodically
+                # Log status
                 now = datetime.now(timezone.utc)
                 time_to_close = (self.current_window_end - now).total_seconds() if self.current_window_end else 0
-                time_to_close_min = int(time_to_close/60)
                 
-                # LOG MARKET PRICES every minute (for proof of price action)
-                if int(time_to_close) % 60 == 0:  # Once per minute
+                # Log prices every minute
+                if int(elapsed) % 60 == 0:
                     self._log_market_prices()
                 
-                # EXIT ALL at 5 minutes before close
-                if 240 < time_to_close <= 300 and self.open_positions:  # Between 4-5 min left
-                    logger.info(f"⏰ 5 MIN WARNING - EXITING ALL POSITIONS")
-                    await self._exit_all_positions()
-                    await asyncio.sleep(5)
-                    continue
-                
-                # STOP NEW TRADES 3 minutes before window close
-                if time_to_close < 180:  # 3 minutes
-                    if time_to_close > 0:
-                        logger.info(f"⏰ Window closing in {time_to_close_min}m - LIQUIDITY LOCKDOWN - No new trades")
-                        await asyncio.sleep(10)
-                        continue
-                
-                logger.info(f"💰 Bankroll: ${self.our_bankroll:.2f} | Window closes in {time_to_close_min}m | Positions: {list(self.open_positions.keys())}")
+                logger.info(f"💰 Sim Balance: ${self.simulated_balance:.2f} | Window: {int(time_to_close/60)}m | Pos: {list(self.simulated_positions.keys())}")
                 
                 # Poll for trades
                 activity = tracker.get_user_activity(self.competitor_address, limit=10)
@@ -318,12 +325,11 @@ class PureCopyStrategy(BaseStrategy):
                     
                     # Parse trade
                     slug = trade.get('slug', '')
-                    side = trade.get('side', '')  # BUY or SELL
+                    side = trade.get('side', '')
                     size_usd = float(trade.get('size', 0))
                     price = float(trade.get('price', 0.5))
                     
-                    # Extract crypto and window from slug
-                    # Format: eth-updown-15m-1234567890
+                    # Extract crypto
                     parts = slug.split('-')
                     if len(parts) < 4:
                         continue
@@ -336,48 +342,112 @@ class PureCopyStrategy(BaseStrategy):
                     elif crypto == 'SOLANA':
                         crypto = 'SOL'
                     
-                    # Check if this is for current window
                     if crypto not in self.active_markets:
-                        logger.debug(f"⏭️  Skipping {crypto} - not in current window")
                         continue
                     
                     logger.info(f"🚨 distinct-baguette: {side} {crypto} ${size_usd:.2f} @ {price:.2f}")
                     
-                    # Execute (these are synchronous, don't use await)
+                    # Record baguette's trade
+                    self.baguette_trades.append({
+                        'side': side,
+                        'crypto': crypto,
+                        'size': size_usd,
+                        'price': price,
+                        'time': datetime.now(timezone.utc).isoformat()
+                    })
+                    
+                    # Simulate
                     if side == 'BUY':
-                        # Convert price (0.0-1.0) to cents (0-100)
                         price_cents = int(price * 100)
                         position_size = self._get_position_size(size_usd)
-                        
-                        # Map Polymarket side to Kalshi
-                        kalshi_side = 'YES'
-                        
-                        self._execute_trade(crypto, kalshi_side, price_cents, position_size)
-                        
+                        self._simulate_buy(crypto, price_cents, position_size, price)
                     else:  # SELL
                         position_size = self._get_position_size(size_usd)
-                        kalshi_side = 'YES'
-                        
-                        logger.info(f"  🔄 Executing SELL for {crypto}...")
-                        result = self._execute_exit(crypto, kalshi_side, position_size)
-                        if not result:
-                            logger.warning(f"  ⚠️ SELL failed for {crypto}")
+                        self._simulate_sell(crypto, position_size, price)
                 
-                # Wait before next poll
                 await asyncio.sleep(5)
                 
             except Exception as e:
                 logger.error(f"Error in scan loop: {e}")
                 await asyncio.sleep(5)
     
+    async def _print_final_report(self):
+        """Print final simulation report"""
+        logger.info("\n" + "=" * 70)
+        logger.info("📊 SIMULATION FINAL REPORT")
+        logger.info("=" * 70)
+        
+        # Settle any remaining positions at current market price
+        logger.info("\nSettling remaining positions at current prices:")
+        for crypto, pos in list(self.simulated_positions.items()):
+            ticker = pos['ticker']
+            try:
+                r = self.client._request("GET", f"/markets/{ticker}")
+                if r.status_code == 200:
+                    m = r.json().get('market', {})
+                    settle_price = m.get('yes_bid', 50)
+                else:
+                    settle_price = 50
+            except:
+                settle_price = 50
+            
+            entry = pos['entry_price']
+            size = pos['size']
+            pnl = (settle_price - entry) * size * 0.01
+            self.simulated_balance += pnl + (size * settle_price * 0.01)
+            
+            logger.info(f"   {crypto}: {pos['side']} x{size} @ {entry}c -> settle @ {settle_price}c = ${pnl:+.2f}")
+        
+        self.simulated_positions.clear()
+        
+        # Calculate results
+        total_pnl = self.simulated_balance - self.simulation_start_balance
+        pnl_pct = (total_pnl / self.simulation_start_balance) * 100
+        
+        logger.info("\n" + "=" * 70)
+        logger.info("💰 RESULTS:")
+        logger.info("=" * 70)
+        logger.info(f"   Start Balance: ${self.simulation_start_balance:.2f}")
+        logger.info(f"   End Balance:   ${self.simulated_balance:.2f}")
+        logger.info(f"   Total P&L:     ${total_pnl:+.2f} ({pnl_pct:+.2f}%)")
+        logger.info(f"   Total Trades:  {len(self.simulated_trades)}")
+        
+        # Count baguette trades
+        baguette_buys = sum(1 for t in self.baguette_trades if t['side'] == 'BUY')
+        baguette_sells = sum(1 for t in self.baguette_trades if t['side'] == 'SELL')
+        
+        logger.info("\n👤 BAGUETTE COMPARISON:")
+        logger.info(f"   Baguette trades copied: {len(self.baguette_trades)}")
+        logger.info(f"   (Buys: {baguette_buys}, Sells: {baguette_sells})")
+        
+        logger.info("\n" + "=" * 70)
+        logger.info("Trade log saved to: logs/simulation_trades.json")
+        logger.info("=" * 70)
+        
+        # Save detailed trade log
+        import json
+        with open('logs/simulation_trades.json', 'w') as f:
+            json.dump({
+                'start_balance': self.simulation_start_balance,
+                'end_balance': self.simulated_balance,
+                'pnl': total_pnl,
+                'pnl_pct': pnl_pct,
+                'our_trades': self.simulated_trades,
+                'baguette_trades': self.baguette_trades
+            }, f, indent=2)
+    
     async def continuous_trade_loop(self):
         """Entry point for continuous trading"""
         await self.scan()
     
     async def execute(self, opportunities):
-        """Execute trades - not used in this simplified version"""
+        """Execute trades - not used in simulation"""
         return 0
     
     def get_performance(self):
         """Get performance metrics"""
-        return {'trades': len(self.seen_trades), 'pnl': 0}
+        return {
+            'simulated_balance': self.simulated_balance,
+            'pnl': self.simulated_balance - self.simulation_start_balance,
+            'trades': len(self.simulated_trades)
+        }
