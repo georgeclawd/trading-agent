@@ -298,18 +298,19 @@ class PureCopyStrategy(BaseStrategy):
         # Apply same % to our bankroll
         our_trade_usd = self.our_bankroll * their_trade_pct
         
-        # Convert to contracts (size / price)
+        # Convert to contracts: our_trade_usd / (price_in_cents / 100)
+        # = our_trade_usd * 100 / price_in_cents
         if price > 0:
-            contracts = int(our_trade_usd / (price * 10))  # price is in cents (0-99)
+            contracts = int(our_trade_usd * 100 / price)  # price is in cents
         else:
             contracts = 1
         
         # Apply limits
         contracts = max(self.min_trade_size, min(contracts, self.max_trade_size))
         
-        # Check if we'd exceed max exposure
+        # Check if we'd exceed max exposure (price in cents -> dollars * 0.01)
         max_allowed_exposure = self.our_bankroll * self.max_exposure_pct
-        if self.open_exposure + (contracts * price * 0.1) > max_allowed_exposure:
+        if self.open_exposure + (contracts * price * 0.01) > max_allowed_exposure:
             # Reduce size to stay under limit
             remaining = max_allowed_exposure - self.open_exposure
             if remaining > 0:
@@ -325,7 +326,7 @@ class PureCopyStrategy(BaseStrategy):
     
     def _update_exposure(self, contracts: int, price: float):
         """Update tracked exposure when trade is executed"""
-        self.open_exposure += contracts * price * 0.1  # Approximate USD value
+        self.open_exposure += contracts * price * 0.01  # Convert cents to USD
     
     def _get_crypto(self, slug: str) -> Optional[str]:
         """Detect crypto from Polymarket slug"""
